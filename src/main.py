@@ -11,6 +11,9 @@ from langgraph.graph import StateGraph, END, START
 from Bio import Entrez
 from Bio import Medline # To parse fetched records
 
+# Import arxiv library for ArXiv searching
+import arxiv
+
 # --- Environment Setup ---
 
 # Load environment variables from .env file
@@ -35,68 +38,39 @@ if not ENTREZ_EMAIL:
 else:
     Entrez.email = ENTREZ_EMAIL
 
-# Instantiate the LLM for routing and potentially other tasks
-# Use temperature 0 for more deterministic routing/refinement
+# Instantiate the LLM for routing, chat, and refinement
 llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=OPENAI_API_KEY)
 
 # --- Agent State Definition ---
 
-# Define the structure for the data that flows through the graph
 class AgentState(TypedDict):
     """
     Represents the state of our agent graph.
     """
-    query: str # The initial user query
-    refined_query: Optional[str] # Store the LLM-refined query for PubMed
-    search_results: Optional[List[Dict[str, Any]]] # Store structured search results
-    chat_response: Optional[str] # Store responses from the chat agent
-    error: Optional[str] # To store potential errors
-    next_node: Optional[str] # Field to guide routing
+    query: str
+    refined_query: Optional[str]
+    search_results: Optional[List[Dict[str, Any]]]
+    chat_response: Optional[str]
+    error: Optional[str]
+    next_node: Optional[str]
 
-# --- Agent Nodes ---
+# --- Helper Functions for Literature Search ---
 
-def call_literature_agent(state: AgentState) -> AgentState:
-    """
-    Literature Agent node that searches PubMed using Bio.Entrez.
-    Includes an LLM step to refine the user query into effective search terms.
-    """
-    print("--- Calling Literature Agent ---")
-    original_query = state['query']
-    print(f"Received original query: {original_query}")
+def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """Helper function to search PubMed and return formatted results."""
+    print(f"Searching PubMed for '{query}'...")
     results = []
-    error_message = None
-    refined_query_for_search = original_query # Default to original if refinement fails
-    max_results = 5
-
     try:
-        # --- LLM Query Refinement Step ---
-        print("Refining query for PubMed search...")
-        refinement_prompt = f"""Given the user's query, extract the core topic or keywords suitable for a PubMed search. Focus on nouns, technical terms, and essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
-
-User Query: "{original_query}"
-Refined PubMed Query:"""
-
-        try:
-            refinement_response = llm.invoke(refinement_prompt)
-            refined_query_for_search = refinement_response.content.strip()
-            print(f"Refined query: {refined_query_for_search}")
-        except Exception as refine_e:
-            print(f"Warning: LLM query refinement failed: {refine_e}. Using original query.")
-            error_message = f"Query refinement failed: {refine_e}. " # Add to potential errors
-
-        # --- PubMed Search using Refined Query ---
-        print(f"Searching PubMed for PMIDs using term '{refined_query_for_search}' (max_results={max_results})...")
-        handle = Entrez.esearch(db="pubmed", term=refined_query_for_search, retmax=max_results)
+        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
         search_results_entrez = Entrez.read(handle)
         handle.close()
         id_list = search_results_entrez["IdList"]
 
         if not id_list:
-            print("No results found on PubMed for the refined query.")
-            # Store the refined query in the state even if no results
-            return {"refined_query": refined_query_for_search, "search_results": [], "error": error_message}
+            print("No results found on PubMed.")
+            return []
 
-        print(f"Found {len(id_list)} PMIDs. Fetching details...")
+        print(f"Found {len(id_list)} PMIDs on PubMed. Fetching details...")
         handle = Entrez.efetch(db="pubmed", id=id_list, rettype="medline", retmode="text")
         records = Medline.parse(handle)
 
@@ -107,53 +81,135 @@ Refined PubMed Query:"""
             journal = record.get("JT", "N/A")
             authors = record.get("AU", [])
             results.append({
-                "pmid": pmid, "title": title, "abstract": abstract,
-                "journal": journal, "authors": authors,
+                "id": pmid, "source": "PubMed", "title": title,
+                "abstract": abstract, "journal": journal, "authors": authors,
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             })
         handle.close()
-        print(f"Successfully fetched and parsed details for {len(results)} records.")
-
+        print(f"Successfully fetched and parsed {len(results)} PubMed records.")
     except Exception as e:
         print(f"Error during PubMed search: {e}")
-        # Append search error to any refinement error
-        search_error = f"An error occurred during PubMed search: {str(e)}"
-        error_message = (error_message + search_error) if error_message else search_error
-        # Store the refined query and error
-        return {"refined_query": refined_query_for_search, "search_results": [], "error": error_message}
+    return results
 
-    # Update the state with the refined query and results
-    return {"refined_query": refined_query_for_search, "search_results": results, "error": error_message}
+def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """
+    Helper function to search ArXiv and return formatted results.
+    Uses the recommended arxiv.Client method.
+    """
+    print(f"Searching ArXiv for '{query}'...")
+    results = []
+    try:
+        # --- Use arxiv.Client as recommended ---
+        client = arxiv.Client()
+        search = arxiv.Search(
+            query=query,
+            max_results=max_results,
+            sort_by=arxiv.SortCriterion.Relevance
+        )
+        # Get results using the client
+        arxiv_results = list(client.results(search))
+        # --- End of recommended method ---
+
+        if not arxiv_results:
+             print("No results found on ArXiv.")
+             return []
+
+        print(f"Found {len(arxiv_results)} results on ArXiv.")
+        for result in arxiv_results:
+            arxiv_id = result.entry_id.split('/')[-1]
+            results.append({
+                "id": arxiv_id, "source": "ArXiv", "title": result.title,
+                "abstract": result.summary.replace('\n', ' '),
+                "authors": [str(author) for author in result.authors],
+                "published": str(result.published),
+                "url": result.pdf_url
+            })
+    except Exception as e:
+        print(f"Error during ArXiv search: {e}")
+    return results
+
+# --- Agent Nodes ---
+
+def call_literature_agent(state: AgentState) -> AgentState:
+    """
+    Literature Agent node: Refines query, searches PubMed & ArXiv, combines results.
+    (Code is unchanged, relies on updated helpers)
+    """
+    print("--- Calling Literature Agent ---")
+    original_query = state['query']
+    print(f"Received original query: {original_query}")
+    combined_results = []
+    error_message = None
+    refined_query_for_search = original_query
+    max_results_per_source = 3
+
+    try:
+        print("Refining query for literature search...")
+        refinement_prompt = f"""Given the user's query, extract the core topic or keywords suitable for searching scientific databases like PubMed and ArXiv. Focus on nouns, technical terms, and essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
+
+User Query: "{original_query}"
+Refined Search Query:"""
+        try:
+            refinement_response = llm.invoke(refinement_prompt)
+            refined_query_for_search = refinement_response.content.strip()
+            print(f"Refined query: {refined_query_for_search}")
+        except Exception as refine_e:
+            print(f"Warning: LLM query refinement failed: {refine_e}. Using original query.")
+            error_message = f"Query refinement failed: {refine_e}. "
+
+        pubmed_results = _search_pubmed(refined_query_for_search, max_results_per_source)
+        arxiv_results = _search_arxiv(refined_query_for_search, max_results_per_source)
+
+        combined_results.extend(pubmed_results)
+        combined_results.extend(arxiv_results)
+        print(f"Total combined results: {len(combined_results)}")
+
+    except Exception as e:
+        print(f"An unexpected error occurred in literature agent: {e}")
+        search_error = f"Literature search failed: {str(e)}"
+        error_message = (error_message + search_error) if error_message else search_error
+
+    return {
+        "refined_query": refined_query_for_search,
+        "search_results": combined_results,
+        "error": error_message
+    }
 
 
 def call_chat_agent(state: AgentState) -> AgentState:
     """
-    Placeholder for a Chat Agent node.
+    Chat Agent node that uses the LLM to generate a response to the user's query.
     (Code is unchanged)
     """
     print("--- Calling Chat Agent ---")
     query = state['query']
     print(f"Received query: {query}")
-    # TODO: Implement actual chat logic using the LLM if needed, or just respond
-    dummy_response = f"Placeholder chat response to: '{query}'"
-    print(f"Returning dummy response: {dummy_response}")
-    return {"chat_response": dummy_response}
+    error_message = None
+    chat_response_text = "Sorry, I couldn't generate a response."
+
+    try:
+        chat_prompt = f"User query: {query}\nAssistant response:"
+        response = llm.invoke(chat_prompt)
+        chat_response_text = response.content.strip()
+        print(f"LLM chat response: {chat_response_text}")
+    except Exception as e:
+        print(f"Error during LLM chat generation: {e}")
+        error_message = f"Chat generation failed: {str(e)}"
+
+    return {"chat_response": chat_response_text, "error": error_message}
 
 def route_query(state: AgentState) -> AgentState:
     """
     Router node that classifies the user query using an LLM.
-    Determines whether the query is for literature search or general chat.
-    Uses an improved prompt for better classification.
     (Code is unchanged)
     """
     print("--- Calling Router ---")
     query = state['query']
     print(f"Routing query: {query}")
 
-    # --- IMPROVED PROMPT ---
     prompt = f"""Classify the user's query into one of the following categories: 'literature_search' or 'chat'. Respond ONLY with the category name.
 
-    - 'literature_search': The user is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed). Keywords often include "find papers", "search for articles", "publications on", "literature about".
+    - 'literature_search': The user is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed or ArXiv). Keywords often include "find papers", "search for articles", "publications on", "literature about".
         Examples:
             "Find papers on CRISPR" -> literature_search
             "Search PubMed for gene editing" -> literature_search
@@ -250,14 +306,10 @@ if __name__ == "__main__":
         if initial_query.lower() == 'quit':
             break
 
-        # Initialize state, including new refined_query field
+        # Initialize state
         initial_state = {
-            "query": initial_query,
-            "refined_query": None,
-            "search_results": None,
-            "chat_response": None,
-            "error": None,
-            "next_node": None
+            "query": initial_query, "refined_query": None, "search_results": None,
+            "chat_response": None, "error": None, "next_node": None
         }
 
         print("\nInvoking the agent graph...")
@@ -268,32 +320,28 @@ if __name__ == "__main__":
             print("Final State Output:")
 
             if final_state.get("error"):
-                # Print accumulated errors (could be from refinement and/or search)
                 print(f"An error occurred: {final_state['error']}")
 
             if final_state.get("search_results"):
                 results = final_state["search_results"]
                 print(f"Found {len(results)} literature results (using refined query: '{final_state.get('refined_query', 'N/A')}'):")
                 for i, result in enumerate(results):
-                    print(f"\n--- Result {i+1} ---")
+                    print(f"\n--- Result {i+1} ({result.get('source', 'N/A')}) ---")
                     print(f"  Title: {result.get('title', 'N/A')}")
-                    print(f"  PMID: {result.get('pmid', 'N/A')} ({result.get('url', '#')})")
+                    print(f"  ID: {result.get('id', 'N/A')}")
+                    print(f"  URL: {result.get('url', '#')}")
             elif final_state.get("chat_response"):
-                print(f"Chat response: {final_state['chat_response']}")
-            # Handle case where literature search ran but found 0 results (no error)
+                print(f"\nBioAgent: {final_state['chat_response']}")
             elif final_state.get("next_node") == "literature_agent" and not final_state.get("error"):
-                 print(f"No literature results found for refined query: '{final_state.get('refined_query', 'N/A')}'")
-            elif not final_state.get("error"): # Catch other cases with no output
-                 print("No specific output generated (check agent logic).")
-
+                 print(f"No literature results found from PubMed or ArXiv for refined query: '{final_state.get('refined_query', 'N/A')}'")
+            elif not final_state.get("error"):
+                 print("No specific output generated.")
 
         except Exception as e:
             print(f"\nAn unexpected error occurred during graph invocation: {e}")
-            # Print state if available for debugging unexpected errors
             try:
                 print("State at time of error:", json.dumps(final_state, indent=2))
-            except: # Handle case where final_state might not be defined/serializable
+            except:
                  print("Could not retrieve state at time of error.")
-
 
     print("\nBioAgent session ended.")
