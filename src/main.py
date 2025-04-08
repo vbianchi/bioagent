@@ -31,12 +31,13 @@ if not ENTREZ_EMAIL:
     print("Warning: ENTREZ_EMAIL not found in .env file.")
     print("NCBI Entrez requires an email address for identification.")
     print("Please add 'ENTREZ_EMAIL=your.email@example.com' to your .env file.")
-    # You might choose to exit here, or proceed with a default/warning
-    # For now, let's exit if email is not provided, as it's good practice
     sys.exit(1)
 else:
-    # Set the email for Entrez requests
     Entrez.email = ENTREZ_EMAIL
+
+# Instantiate the LLM for routing and potentially other tasks
+# Use temperature 0 for more deterministic routing/refinement
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0, openai_api_key=OPENAI_API_KEY)
 
 # --- Agent State Definition ---
 
@@ -46,68 +47,165 @@ class AgentState(TypedDict):
     Represents the state of our agent graph.
     """
     query: str # The initial user query
+    refined_query: Optional[str] # Store the LLM-refined query for PubMed
     search_results: Optional[List[Dict[str, Any]]] # Store structured search results
+    chat_response: Optional[str] # Store responses from the chat agent
     error: Optional[str] # To store potential errors
+    next_node: Optional[str] # Field to guide routing
 
 # --- Agent Nodes ---
 
 def call_literature_agent(state: AgentState) -> AgentState:
     """
     Literature Agent node that searches PubMed using Bio.Entrez.
+    Includes an LLM step to refine the user query into effective search terms.
     """
     print("--- Calling Literature Agent ---")
-    query = state['query']
-    print(f"Received query: {query}")
+    original_query = state['query']
+    print(f"Received original query: {original_query}")
     results = []
     error_message = None
-    max_results = 5 # Limit the number of results for now
+    refined_query_for_search = original_query # Default to original if refinement fails
+    max_results = 5
 
     try:
-        # 1. Search PubMed to get PMIDs (PubMed IDs)
-        print(f"Searching PubMed for PMIDs (max_results={max_results})...")
-        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
-        search_results = Entrez.read(handle)
+        # --- LLM Query Refinement Step ---
+        print("Refining query for PubMed search...")
+        refinement_prompt = f"""Given the user's query, extract the core topic or keywords suitable for a PubMed search. Focus on nouns, technical terms, and essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
+
+User Query: "{original_query}"
+Refined PubMed Query:"""
+
+        try:
+            refinement_response = llm.invoke(refinement_prompt)
+            refined_query_for_search = refinement_response.content.strip()
+            print(f"Refined query: {refined_query_for_search}")
+        except Exception as refine_e:
+            print(f"Warning: LLM query refinement failed: {refine_e}. Using original query.")
+            error_message = f"Query refinement failed: {refine_e}. " # Add to potential errors
+
+        # --- PubMed Search using Refined Query ---
+        print(f"Searching PubMed for PMIDs using term '{refined_query_for_search}' (max_results={max_results})...")
+        handle = Entrez.esearch(db="pubmed", term=refined_query_for_search, retmax=max_results)
+        search_results_entrez = Entrez.read(handle)
         handle.close()
-        id_list = search_results["IdList"]
+        id_list = search_results_entrez["IdList"]
 
         if not id_list:
-            print("No results found on PubMed for the query.")
-            return {"search_results": [], "error": None}
+            print("No results found on PubMed for the refined query.")
+            # Store the refined query in the state even if no results
+            return {"refined_query": refined_query_for_search, "search_results": [], "error": error_message}
 
         print(f"Found {len(id_list)} PMIDs. Fetching details...")
-
-        # 2. Fetch details for the found PMIDs
         handle = Entrez.efetch(db="pubmed", id=id_list, rettype="medline", retmode="text")
-        records = Medline.parse(handle) # Parse MEDLINE formatted records
+        records = Medline.parse(handle)
 
-        # 3. Extract relevant information from records
         for record in records:
-            # Extract desired fields (handle potential missing keys)
             pmid = record.get("PMID", "N/A")
             title = record.get("TI", "No title found")
             abstract = record.get("AB", "No abstract found")
             journal = record.get("JT", "N/A")
-            authors = record.get("AU", []) # Authors is a list
-
+            authors = record.get("AU", [])
             results.append({
-                "pmid": pmid,
-                "title": title,
-                "abstract": abstract,
-                "journal": journal,
-                "authors": authors,
-                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" # Construct PubMed URL
+                "pmid": pmid, "title": title, "abstract": abstract,
+                "journal": journal, "authors": authors,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
             })
         handle.close()
         print(f"Successfully fetched and parsed details for {len(results)} records.")
 
     except Exception as e:
         print(f"Error during PubMed search: {e}")
-        error_message = f"An error occurred during PubMed search: {str(e)}"
-        # Return empty results and the error message
-        return {"search_results": [], "error": error_message}
+        # Append search error to any refinement error
+        search_error = f"An error occurred during PubMed search: {str(e)}"
+        error_message = (error_message + search_error) if error_message else search_error
+        # Store the refined query and error
+        return {"refined_query": refined_query_for_search, "search_results": [], "error": error_message}
 
-    # Update the state with the results
-    return {"search_results": results, "error": None}
+    # Update the state with the refined query and results
+    return {"refined_query": refined_query_for_search, "search_results": results, "error": error_message}
+
+
+def call_chat_agent(state: AgentState) -> AgentState:
+    """
+    Placeholder for a Chat Agent node.
+    (Code is unchanged)
+    """
+    print("--- Calling Chat Agent ---")
+    query = state['query']
+    print(f"Received query: {query}")
+    # TODO: Implement actual chat logic using the LLM if needed, or just respond
+    dummy_response = f"Placeholder chat response to: '{query}'"
+    print(f"Returning dummy response: {dummy_response}")
+    return {"chat_response": dummy_response}
+
+def route_query(state: AgentState) -> AgentState:
+    """
+    Router node that classifies the user query using an LLM.
+    Determines whether the query is for literature search or general chat.
+    Uses an improved prompt for better classification.
+    (Code is unchanged)
+    """
+    print("--- Calling Router ---")
+    query = state['query']
+    print(f"Routing query: {query}")
+
+    # --- IMPROVED PROMPT ---
+    prompt = f"""Classify the user's query into one of the following categories: 'literature_search' or 'chat'. Respond ONLY with the category name.
+
+    - 'literature_search': The user is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed). Keywords often include "find papers", "search for articles", "publications on", "literature about".
+        Examples:
+            "Find papers on CRISPR" -> literature_search
+            "Search PubMed for gene editing" -> literature_search
+            "What articles discuss LLMs in bioinformatics?" -> literature_search
+            "Show me recent studies on vaccine effectiveness" -> literature_search
+
+    - 'chat': The user is asking a general question, asking for a definition or explanation, making a statement, greeting, or having a conversation. These queries typically don't require searching literature databases directly. Keywords often include "what is", "explain", "tell me about", "hello", "hi", "can you".
+        Examples:
+            "Hello" -> chat
+            "Explain what an LLM is" -> chat
+            "What is bioinformatics?" -> chat
+            "Tell me about DNA sequencing" -> chat
+            "What did you find in the last search?" -> chat
+            "Can you help me write some code?" -> chat
+
+    User Query: "{query}"
+    Classification:"""
+
+    try:
+        response = llm.invoke(prompt)
+        classification = response.content.strip().lower().replace("'", "").replace('"', '')
+        print(f"LLM Classification: {classification}")
+
+        if classification == "literature_search":
+            print("Routing to Literature Agent.")
+            return {"next_node": "literature_agent"}
+        elif classification == "chat":
+             print("Routing to Chat Agent.")
+             return {"next_node": "chat_agent"}
+        else:
+            print(f"Warning: Unexpected classification '{classification}'. Defaulting to Chat Agent.")
+            return {"next_node": "chat_agent"}
+
+    except Exception as e:
+        print(f"Error during LLM routing: {e}")
+        print("Defaulting to Chat Agent due to error.")
+        return {"next_node": "chat_agent", "error": f"Routing error: {e}"}
+
+
+# --- Conditional Edge Logic ---
+
+def decide_next_node(state: AgentState) -> str:
+    """
+    Determines the next node to visit based on the 'next_node' field in the state.
+    (Code is unchanged)
+    """
+    next_node = state.get("next_node")
+    if next_node in ["literature_agent", "chat_agent"]:
+        return next_node
+    else:
+        print(f"Warning: Invalid next_node value '{next_node}'. Ending.")
+        return END
 
 
 # --- Graph Definition ---
@@ -116,11 +214,27 @@ def call_literature_agent(state: AgentState) -> AgentState:
 graph_builder = StateGraph(AgentState)
 
 # Add nodes to the graph
+graph_builder.add_node("router", route_query)
 graph_builder.add_node("literature_agent", call_literature_agent)
+graph_builder.add_node("chat_agent", call_chat_agent)
 
-# Define the entry and exit points of the graph
-graph_builder.add_edge(START, "literature_agent")
+# Define the entry point
+graph_builder.add_edge(START, "router")
+
+# Add conditional edges from the router
+graph_builder.add_conditional_edges(
+    "router",
+    decide_next_node,
+    {
+        "literature_agent": "literature_agent",
+        "chat_agent": "chat_agent",
+        END: END
+    }
+)
+
+# Define edges leading to the end
 graph_builder.add_edge("literature_agent", END)
+graph_builder.add_edge("chat_agent", END)
 
 # Compile the graph into a runnable application
 app = graph_builder.compile()
@@ -129,31 +243,57 @@ app = graph_builder.compile()
 
 if __name__ == "__main__":
     print("BioAgent Co-Pilot Initializing...")
-    print(f"Using Entrez Email: {Entrez.email}") # Confirm email is set
+    print(f"Using Entrez Email: {Entrez.email}")
 
-    initial_query = input("Enter your research query: ")
-    initial_state = {"query": initial_query, "search_results": None, "error": None} # Initialize state
+    while True:
+        initial_query = input("\nEnter your research query or message (or type 'quit'): ")
+        if initial_query.lower() == 'quit':
+            break
 
-    print("\nInvoking the agent graph...")
-    final_state = app.invoke(initial_state)
+        # Initialize state, including new refined_query field
+        initial_state = {
+            "query": initial_query,
+            "refined_query": None,
+            "search_results": None,
+            "chat_response": None,
+            "error": None,
+            "next_node": None
+        }
 
-    print("\n--- Graph Execution Complete ---")
-    print("Final State:")
+        print("\nInvoking the agent graph...")
+        try:
+            final_state = app.invoke(initial_state)
 
-    if final_state.get("error"):
-        print(f"An error occurred: {final_state['error']}")
-    elif final_state.get("search_results"):
-        results = final_state["search_results"]
-        print(f"Found {len(results)} results:")
-        for i, result in enumerate(results):
-            print(f"\n--- Result {i+1} ---")
-            print(f"  Title: {result.get('title', 'N/A')}")
-            print(f"  PMID: {result.get('pmid', 'N/A')} ({result.get('url', '#')})")
-            # Optionally print abstract or other details
-            # print(f"  Abstract: {result.get('abstract', 'N/A')[:200]}...") # Print first 200 chars
-    else:
-        print("No results found or state is unexpected.")
+            print("\n--- Graph Execution Complete ---")
+            print("Final State Output:")
 
-    # Optionally print the full final state for debugging
-    # print("\nFull Final State Dictionary:")
-    # print(json.dumps(final_state, indent=2))
+            if final_state.get("error"):
+                # Print accumulated errors (could be from refinement and/or search)
+                print(f"An error occurred: {final_state['error']}")
+
+            if final_state.get("search_results"):
+                results = final_state["search_results"]
+                print(f"Found {len(results)} literature results (using refined query: '{final_state.get('refined_query', 'N/A')}'):")
+                for i, result in enumerate(results):
+                    print(f"\n--- Result {i+1} ---")
+                    print(f"  Title: {result.get('title', 'N/A')}")
+                    print(f"  PMID: {result.get('pmid', 'N/A')} ({result.get('url', '#')})")
+            elif final_state.get("chat_response"):
+                print(f"Chat response: {final_state['chat_response']}")
+            # Handle case where literature search ran but found 0 results (no error)
+            elif final_state.get("next_node") == "literature_agent" and not final_state.get("error"):
+                 print(f"No literature results found for refined query: '{final_state.get('refined_query', 'N/A')}'")
+            elif not final_state.get("error"): # Catch other cases with no output
+                 print("No specific output generated (check agent logic).")
+
+
+        except Exception as e:
+            print(f"\nAn unexpected error occurred during graph invocation: {e}")
+            # Print state if available for debugging unexpected errors
+            try:
+                print("State at time of error:", json.dumps(final_state, indent=2))
+            except: # Handle case where final_state might not be defined/serializable
+                 print("Could not retrieve state at time of error.")
+
+
+    print("\nBioAgent session ended.")
