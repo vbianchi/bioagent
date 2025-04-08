@@ -35,7 +35,7 @@ Thumbs.db
 .env
 *.env
 config/*.key
-config/secrets.yaml
+# config/secrets.yaml # Keep settings.yaml, ignore secrets.yaml if added later
 *.pem
 credentials*
 

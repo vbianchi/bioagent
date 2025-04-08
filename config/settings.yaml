@@ -1,53 +1,45 @@
 # Configuration settings for the BioAgent
 
-# LLM Settings
+# LLM Provider ('openai', 'gemini', 'ollama')
+llm_provider: "gemini" # CHANGE THIS to 'gemini' or 'ollama' as needed
+
+# LLM Settings (Provider-specific model names)
 llm_settings:
-  # Model name from OpenAI (or adapt for Ollama later)
-  model_name: "gpt-3.5-turbo"
+  # --- OpenAI ---
+  openai_model_name: "gpt-3.5-turbo"
+  # --- Google Gemini ---
+  # Example: "gemini-pro", "gemini-1.5-pro-latest"
+  gemini_model_name: "gemini-2.0-flash-lite"
+  # --- Ollama ---
+  # Specify the model name you have pulled in Ollama (e.g., "llama3", "mistral")
+  ollama_model_name: "gemma3"
+  # Optional: Specify Ollama base URL if not default (http://localhost:11434)
+  # ollama_base_url: "http://localhost:11434"
+
+  # --- Common Settings ---
   # Temperature for LLM calls (0 = deterministic, >0 = creative)
   temperature: 0
 
 # Search Settings
 search_settings:
-  # Max results to fetch *per source* (PubMed, ArXiv)
   max_results_per_source: 3
-  # Max abstracts to pass to the summarizer LLM
   max_abstracts_to_summarize: 3
 
 # Prompt Templates (Use | for multi-line strings preserving newlines)
-# Variables like {query}, {abstracts_text} will be inserted by the code
 prompts:
-  # For routing user input
   routing_prompt: |
     Classify the user's query into one of the following categories: 'literature_search' or 'chat'. Respond ONLY with the category name.
 
-    - 'literature_search': The user is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed or ArXiv). Keywords often include "find papers", "search for articles", "publications on", "literature about".
-        Examples:
-            "Find papers on CRISPR" -> literature_search
-            "Search PubMed for gene editing" -> literature_search
-            "What articles discuss LLMs in bioinformatics?" -> literature_search
-            "Show me recent studies on vaccine effectiveness" -> literature_search
-
-    - 'chat': The user is asking a general question, asking for a definition or explanation, making a statement, greeting, or having a conversation. These queries typically don't require searching literature databases directly. Keywords often include "what is", "explain", "tell me about", "hello", "hi", "can you". It might also refer to previous turns like "what did you find?".
-        Examples:
-            "Hello" -> chat
-            "Explain what an LLM is" -> chat
-            "What is bioinformatics?" -> chat
-            "Tell me about DNA sequencing" -> chat
-            "What did you find in the last search?" -> chat
-            "Can you help me write some code?" -> chat
+    - 'literature_search': User is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed or ArXiv). Keywords: "find papers", "search for articles", "publications on", "literature about".
+    - 'chat': User is asking a general question, definition, explanation, making a statement, greeting, or having a conversation. Keywords: "what is", "explain", "tell me about", "hello", "hi", "can you". Also includes follow-up questions like "what did you find?".
 
     User Query: "{query}"
     Classification:
-
-  # For refining literature search queries
   refinement_prompt: |
-    Given the user's query, extract the core topic or keywords suitable for searching scientific databases like PubMed and ArXiv. Focus on nouns, technical terms, and essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
+    Given the user's query, extract the core topic or keywords suitable for searching scientific databases like PubMed and ArXiv. Focus on nouns, technical terms, essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
 
     User Query: "{query}"
     Refined Search Query:
-
-  # For summarizing search result abstracts
   summarization_prompt: |
     Given the user's original query and the following abstracts from search results, provide a concise summary of the key findings relevant to the query.
 
@@ -59,8 +51,7 @@ prompts:
     ---
 
     Concise Summary:
-
-  # For basic chat responses (can be enhanced)
+  # Basic chat prompt (less critical now history is used directly)
   chat_prompt: |
     User query: {query}
     Assistant response:
