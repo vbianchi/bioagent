@@ -1,6 +1,6 @@
 # BioAgent Co-Pilot (Working Title)
 
-A project to develop an agentic AI co-pilot for epidemiology and bioinformatics research tasks.
+A project to develop an agentic AI co-pilot for epidemiology and bioinformatics research tasks. Currently supports basic PubMed literature search.
 
 ## Description
 
@@ -12,8 +12,8 @@ This project uses `uv` for environment and package management.
 
 1.  **Clone the repository:**
     ```bash
-    git clone <your-repo-url>
-    cd <your-repo-name>
+    git clone [https://github.com/vbianchi/bioagent.git](https://github.com/vbianchi/bioagent.git)
+    cd bioagent
     ```
 2.  **Create and activate the virtual environment:**
     Make sure `uv` is installed.
@@ -25,18 +25,22 @@ This project uses `uv` for environment and package management.
     source .venv/bin/activate
     ```
 3.  **Install dependencies:**
+    Create or update the `requirements.txt` file with the content specified in this document.
     ```bash
     uv pip install -r requirements.txt
     ```
-    *(Note: We haven't created requirements.txt yet. We will add dependencies as needed.)*
+4.  **API Key & Configuration Setup:**
+    * Create a file named `.env` in the root directory (`bioagent/`).
+    * Add your OpenAI API key: `OPENAI_API_KEY='your-actual-openai-api-key-here'`
+    * **Add your email address for NCBI Entrez:** `ENTREZ_EMAIL='your.email@example.com'` (NCBI requires this for identification when using their APIs).
+    * Ensure `.env` is listed in your `.gitignore` file.
 
 ## Usage
 
-(Add instructions on how to run the agent once implemented.)
+Activate the environment (`source .venv/bin/activate`) and run the main script:
 
 ```bash
-# Example command (to be defined)
-python src/main.py --query "Find recent papers on CRISPR in E. coli"
+python src/main.py
 ```
 
 ## Project Structure
