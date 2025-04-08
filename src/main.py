@@ -48,22 +48,20 @@ if llm_provider == "openai":
 elif llm_provider == "gemini":
     from langchain_google_genai import ChatGoogleGenerativeAI
     if not GOOGLE_API_KEY: sys.exit("Error: LLM provider is 'gemini' but GOOGLE_API_KEY not found in .env file.")
-    llm_model = get_config_value(config, "llm_settings.gemini_model_name", "gemini-1.5-flash-latest") # Updated default
+    llm_model = get_config_value(config, "llm_settings.gemini_model_name", "gemini-1.5-flash-latest")
     try:
-        # Removed deprecated convert_system_message_to_human=True
         llm = ChatGoogleGenerativeAI(model=llm_model, temperature=llm_temp, google_api_key=GOOGLE_API_KEY)
         print(f"LLM Initialized: Google Gemini (model={llm_model}, temperature={llm_temp})")
     except Exception as e:
         sys.exit(f"Error initializing Google Gemini LLM: {e}")
 
 elif llm_provider == "ollama":
-    # Use the new dedicated package
     try:
         from langchain_ollama import ChatOllama
     except ImportError:
         sys.exit("Error: langchain-ollama package not found. Please install it: pip install langchain-ollama")
-
-    llm_model = get_config_value(config, "llm_settings.ollama_model_name", "llama3")
+    # Use updated default from config
+    llm_model = get_config_value(config, "llm_settings.ollama_model_name", "gemma3")
     ollama_base_url = get_config_value(config, "llm_settings.ollama_base_url")
     try:
         init_params = {"model": llm_model, "temperature": llm_temp}
@@ -74,21 +72,18 @@ elif llm_provider == "ollama":
         print(f"LLM Initialized: Ollama (model={llm_model}, temperature={llm_temp}, base_url={ollama_base_url or 'default'})")
     except Exception as e:
         print(f"Error initializing or connecting to Ollama LLM: {e}")
-        print("Please ensure the Ollama service is running and the specified model ('{llm_model}') is available.")
+        print(f"Please ensure the Ollama service is running and the specified model ('{llm_model}') is available.")
         sys.exit(1)
 
 else:
     sys.exit(f"Error: Unknown llm_provider '{llm_provider}'. Use 'openai', 'gemini', or 'ollama'.")
 
 # --- Search Settings from Config ---
-# Corrected key used here:
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
-# Assign the single setting to both variables used in helpers
 MAX_RESULTS_PUBMED = MAX_RESULTS_PER_SOURCE
 MAX_RESULTS_ARXIV = MAX_RESULTS_PER_SOURCE
 print(f"Search settings: max_results_per_source={MAX_RESULTS_PER_SOURCE}, max_abstracts_to_summarize={MAX_ABSTRACTS_TO_SUMMARIZE}")
-
 
 # --- Prompt Templates from Config ---
 ROUTING_PROMPT_TEMPLATE = get_config_value(config, "prompts.routing_prompt", "Error: Routing prompt not found.")
@@ -107,7 +102,6 @@ class AgentState(TypedDict):
     next_node: Optional[str]
 
 # --- Helper Functions for Literature Search ---
-# (Unchanged - use MAX_RESULTS_PUBMED/ARXIV which are now set correctly)
 def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
     print(f"Searching PubMed for '{query}' (max_results={max_results})...")
     results = []
@@ -153,7 +147,6 @@ def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
     return results
 
 # --- Agent Nodes ---
-# (Unchanged - use global llm and prompt templates)
 def call_literature_agent(state: AgentState) -> AgentState:
     print("--- Calling Literature Agent ---")
     original_query = state['query']
@@ -278,6 +271,11 @@ if __name__ == "__main__":
     MAX_HISTORY_TURNS = 5
     while True:
         initial_query = input("\nEnter your research query or message (or type 'quit'): ")
+        # --- Handle Empty Input ---
+        if not initial_query.strip():
+            print("Please enter a query or message.")
+            continue # Skip graph invocation for empty input
+        # --- ---
         if initial_query.lower() == 'quit': break
         input_for_graph = {
             "query": initial_query, "history": conversation_state["history"],

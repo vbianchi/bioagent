@@ -35,7 +35,7 @@ This project uses `uv` for environment and package management.
     * Ensure the `config/` directory exists.
     * Create or update `config/settings.yaml` with the content provided in this document.
     * **Choose your LLM Provider:** Edit the `llm_provider` setting to `"openai"`, `"gemini"`, or `"ollama"`.
-    * **Set Model Names:** Adjust the corresponding model name setting (e.g., `openai_model_name`, `gemini_model_name`, `ollama_model_name`). For Ollama, ensure the model is pulled locally.
+    * **Set Model Names:** Adjust the corresponding model name setting (e.g., `openai_model_name`, `gemini_model_name`, `ollama_model_name`). The default for Ollama is now `gemma3`. For Ollama, ensure the model is pulled locally.
 5.  **API Keys & Environment (`.env`):**
     * Create or update `.env` in the root directory.
     * **OpenAI:** If using `openai`, add `OPENAI_API_KEY='...'`.
@@ -44,7 +44,7 @@ This project uses `uv` for environment and package management.
     * Ensure `.env` is listed in `.gitignore`.
 6.  **Ollama Setup (if using `ollama` provider):**
     * Install and run Ollama locally: [https://ollama.com/](https://ollama.com/)
-    * Pull the desired model specified in `config/settings.yaml`: e.g., `ollama pull llama3`
+    * Pull the desired model specified in `config/settings.yaml`: e.g., `ollama pull gemma3`
 
 ## Usage
 
@@ -54,9 +54,12 @@ Activate the environment (`source .venv/bin/activate`). **Run the script from th
 python -m src.main
 ```
 
-The script will initialize the LLM specified in `config/settings.yaml` and prompt for input in a loop (type 'quit' to exit). It classifies input:
+*```(Using python -m src.main ensures that Python can correctly find the src package for imports like from src.core.config_loader import ...)```*
+
+The script initializes the LLM specified in `config/settings.yaml` and prompts for input in a loop (type 'quit' to exit). It classifies input:
 -   If 'literature_search', it refines the query, searches PubMed/ArXiv, displays results, and provides a summary.
 -   If 'chat', it routes to the chat function which uses the LLM and conversation history to respond.
+-   If you press Enter with no input, it will now prompt you again instead of processing an empty query. *`(Note: Quality depends on the LLM and prompts in config/settings.yaml.)`*
 
 ## Project Structure
 ├── .venv/            # Virtual environment managed by uv
@@ -76,7 +79,6 @@ The script will initialize the LLM specified in `config/settings.yaml` and promp
 ├── .gitignore        # Files and directories ignored by Git
 ├── requirements.txt  # Project dependencies
 └── README.md         # This file
-
 
 ## Contributing
 (Add contribution guidelines if applicable.)
