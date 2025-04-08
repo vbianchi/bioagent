@@ -1,0 +1,47 @@
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE specific files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Log files
+*.log
+
+# Temporary files
+*.swp
+*~
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Secrets - IMPORTANT! Add any files containing keys/passwords
+.env
+*.env
+config/*.key
+config/secrets.yaml
+*.pem
+credentials*
+
+# Large data files (add patterns for your specific data)
+# data/*.csv
+# data/*.fasta
+
+# Notebook checkpoints
+.ipynb_checkpoints
