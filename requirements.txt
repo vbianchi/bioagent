@@ -10,3 +10,4 @@ langchain-ollama
 colorama
 pandas
 matplotlib
+streamlit
