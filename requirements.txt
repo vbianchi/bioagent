@@ -8,3 +8,5 @@ PyYAML
 langchain-google-genai
 langchain-ollama
 colorama
+pandas
+matplotlib

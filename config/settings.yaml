@@ -3,35 +3,37 @@
 # LLM Provider ('openai', 'gemini', 'ollama')
 llm_provider: "gemini" # CHANGE THIS to 'gemini' or 'ollama' as needed
 
-# LLM Settings (Provider-specific model names)
+# General LLM Settings (Used for routing, chat, refinement, summarization unless overridden)
 llm_settings:
-  # --- OpenAI ---
   openai_model_name: "gpt-3.5-turbo"
-  # --- Google Gemini ---
-  # Example: "gemini-pro", "gemini-1.5-pro-latest"
-  gemini_model_name: "gemini-2.0-flash-lite"
-  # --- Ollama ---
-  # Specify the model name you have pulled in Ollama (e.g., "llama3", "mistral")
+  gemini_model_name: "gemini-2.0-flash"
   ollama_model_name: "gemma3"
-  # Optional: Specify Ollama base URL if not default (http://localhost:11434)
-  # ollama_base_url: "http://localhost:11434"
-
-  # --- Common Settings ---
-  # Temperature for LLM calls (0 = deterministic, >0 = creative)
   temperature: 0
+
+# Coding Agent LLM Settings
+coding_agent_settings:
+  # Provider for coding tasks. Use 'default' to use the main llm_provider above.
+  llm_provider: "gemini"
+  # --- Provider-specific models optimized for coding ---
+  openai_model_name: "gpt-4-turbo-preview" # Suggest stronger model for coding
+  gemini_model_name: "gemini-2.0-flash" # Suggest stronger model for coding
+  ollama_model_name: "codellama:13b" # Example, ensure pulled
+  # --- Common Settings ---
+  temperature: 0.1 # Slightly higher temp might be okay for code gen
 
 # Search Settings
 search_settings:
-  max_results_per_source: 3
-  max_abstracts_to_summarize: 3
+  max_results_per_source: 5
+  max_abstracts_to_summarize: 5
 
-# Prompt Templates (Use | for multi-line strings preserving newlines)
+# Prompt Templates
 prompts:
   routing_prompt: |
-    Classify the user's query into one of the following categories: 'literature_search' or 'chat'. Respond ONLY with the category name.
+    Classify the user's query into one of the following categories: 'literature_search', 'code_generation', or 'chat'. Respond ONLY with the category name.
 
     - 'literature_search': User is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed or ArXiv). Keywords: "find papers", "search for articles", "publications on", "literature about".
-    - 'chat': User is asking a general question, definition, explanation, making a statement, greeting, or having a conversation. Keywords: "what is", "explain", "tell me about", "hello", "hi", "can you". Also includes follow-up questions like "what did you find?".
+    - 'code_generation': User is asking for code to be written, explained, or debugged, often mentioning programming languages (Python, R) or libraries (pandas, matplotlib). Keywords: "write code", "generate python", "plot this", "debug script", "how do I code", "rewrite this code".
+    - 'chat': User is asking a general question, definition, explanation, making a statement, greeting, or having a conversation not covered by the other categories. Keywords: "what is", "explain", "tell me about", "hello", "hi", "can you". Also includes follow-up questions like "what did you find?".
 
     User Query: "{query}"
     Classification:
@@ -51,7 +53,13 @@ prompts:
     ---
 
     Concise Summary:
-  # Basic chat prompt (less critical now history is used directly)
-  chat_prompt: |
-    User query: {query}
-    Assistant response:
+  # Updated prompt for the coding agent - acts as a system message
+  # History is now passed separately via message list.
+  code_generation_prompt: |
+    You are an expert bioinformatics/epidemiology coding assistant.
+    Generate Python or R code based on the user's request.
+    Use the conversation history provided for context, especially if the user asks to modify, translate, or refer to previous code.
+    Assume standard libraries like pandas, matplotlib (Python), dplyr, ggplot2 (R) are available.
+    Provide only the requested code, enclosed in triple backticks with the language identifier (e.g., ```python ... ``` or ```R ... ```).
+    Do not add explanations outside the code comments unless specifically asked in the LATEST request.
+
