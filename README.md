@@ -96,3 +96,29 @@ The agent classifies input:
 
 ## License
 (Specify project license, e.g., MIT, Apache 2.0.)
+
+---
+
+## Testing Plan (Updated)
+
+Includes testing numbered result files:
+
+1.  **Numbered Results Test:**
+    * Run the script (`python -m src.main`).
+    * Perform a literature search (interaction 1).
+    * Perform a chat query (interaction 2).
+    * Perform another literature search (interaction 3).
+    * *Expected:* Check the `workplace/RUN_DIR/results/` folder. It should contain files like `search_results_1.json`, `summary_1.txt`, `chat_response_2.txt`, `search_results_3.json`, `summary_3.txt`. Check `logs/conversation_history.json` contains all 3 interactions.
+2.  **Workplace Directory Test**
+3.  **Color Output Test**
+4.  **LLM Provider Test**
+5.  **Routing Test**
+6.  **Query Refinement Test**
+7.  **Literature Search Test (PubMed & ArXiv)**
+8.  **Summarization Test**
+9.  **Chat Functionality Test**
+10. **Conversational Context Test**
+11. **Configuration Test**
+12. **Empty Input Test**
+13. **Error Handling (Basic)**
+14. **Exit Test**

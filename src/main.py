@@ -3,6 +3,7 @@ import sys
 import json
 import datetime
 import logging
+from io import StringIO
 from typing import TypedDict, List, Dict, Any, Optional, Tuple
 
 # Import colorama
@@ -44,32 +45,24 @@ class ColoredFormatter(logging.Formatter):
         logging.ERROR: COLOR_ERROR,
         logging.CRITICAL: Fore.RED + Style.BRIGHT,
     }
-
     def format(self, record):
         log_color = self.LOG_COLORS.get(record.levelno, COLOR_RESET)
-        # Basic format, you can customize this further
         log_fmt = f"{log_color}{record.levelname}: {record.getMessage()}{COLOR_RESET}"
-        # Optionally add timestamp etc. back if needed for console
-        # log_fmt = f"{log_color}{self.formatTime(record, self.datefmt)} - {record.levelname} - {record.getMessage()}{COLOR_RESET}"
         return log_fmt
 
 # --- Basic Logging Setup ---
-# Root logger setup for basic configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__) # Get logger for this module
-logger.propagate = False # Prevent root logger from duplicating console messages
-
-# Console Handler (StreamHandler) with colored output
+logger = logging.getLogger(__name__)
+logger.propagate = False
 console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO) # Set level for console output
+console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(ColoredFormatter())
 logger.addHandler(console_handler)
-
-# File handler will be added later in main block
+# File handler added in main block
 
 # --- Configuration Loading ---
 config = load_config()
-logger.info("Configuration loaded.") # This will now be colored on console
+logger.info("Configuration loaded.")
 
 # --- Environment Setup ---
 load_dotenv()
@@ -137,27 +130,25 @@ SUMMARIZATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.summarization_
 
 # --- Agent State Definition ---
 class AgentState(TypedDict):
-    query: str
-    history: List[Tuple[str, str]]
-    refined_query: Optional[str]
-    search_results: Optional[List[Dict[str, Any]]]
-    summary: Optional[str]
-    chat_response: Optional[str]
-    error: Optional[str]
-    next_node: Optional[str]
+    query: str; history: List[Tuple[str, str]]; refined_query: Optional[str]
+    search_results: Optional[List[Dict[str, Any]]]; summary: Optional[str]
+    chat_response: Optional[str]; error: Optional[str]; next_node: Optional[str]
 
 # --- Helper Functions for Literature Search ---
 def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
+    # (Unchanged from previous version)
     logger.info(f"Searching PubMed for '{query}' (max_results={max_results})...")
     results = []
     try:
-        handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
-        search_results_entrez = Entrez.read(handle); handle.close()
+        handle_search = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
+        search_results_entrez = Entrez.read(handle_search); handle_search.close()
         id_list = search_results_entrez["IdList"]
         if not id_list: logger.info("No results found on PubMed."); return []
         logger.info(f"Found {len(id_list)} PMIDs on PubMed. Fetching details...")
-        handle = Entrez.efetch(db="pubmed", id=id_list, rettype="medline", retmode="text")
-        records = Medline.parse(handle); handle.close()
+        handle_fetch = Entrez.efetch(db="pubmed", id=id_list, rettype="medline", retmode="text")
+        records_text = handle_fetch.read(); handle_fetch.close()
+        records = Medline.parse(StringIO(records_text))
+        count = 0
         for record in records:
             results.append({
                 "id": record.get("PMID", "N/A"), "source": "PubMed",
@@ -166,11 +157,13 @@ def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
                 "journal": record.get("JT", "N/A"), "authors": record.get("AU", []),
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{record.get('PMID', '')}/"
             })
-        logger.info(f"Successfully fetched/parsed {len(results)} PubMed records.")
-    except Exception as e: logger.error(f"Error during PubMed search: {e}")
+            count += 1
+        logger.info(f"Successfully fetched/parsed {count} PubMed records.")
+    except Exception as e: logger.error(f"Error during PubMed search: {e}", exc_info=True)
     return results
 
 def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
+    # (Unchanged from previous version)
     logger.info(f"Searching ArXiv for '{query}' (max_results={max_results})...")
     results = []
     try:
@@ -186,14 +179,14 @@ def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
                 "authors": [str(author) for author in result.authors],
                 "published": str(result.published), "url": result.pdf_url
             })
-    except Exception as e: logger.error(f"Error during ArXiv search: {e}")
+    except Exception as e: logger.error(f"Error during ArXiv search: {e}", exc_info=True)
     return results
 
 # --- Agent Nodes ---
 def call_literature_agent(state: AgentState) -> AgentState:
+    # (Unchanged from previous version)
     logger.info("--- Calling Literature Agent ---")
-    original_query = state['query']
-    logger.info(f"Received original query: {original_query}")
+    original_query = state['query']; logger.info(f"Received original query: {original_query}")
     error_message = None; refined_query_for_search = original_query
     try:
         logger.info("Refining query for literature search...")
@@ -210,7 +203,7 @@ def call_literature_agent(state: AgentState) -> AgentState:
         combined_results = pubmed_results + arxiv_results
         logger.info(f"Total combined results: {len(combined_results)}")
     except Exception as e:
-        search_error = f"Literature search failed: {str(e)}"; logger.error(search_error)
+        search_error = f"Literature search failed: {str(e)}"; logger.error(search_error, exc_info=True)
         error_message = (error_message + search_error) if error_message else search_error
         combined_results = []
     return {
@@ -219,6 +212,7 @@ def call_literature_agent(state: AgentState) -> AgentState:
     }
 
 def summarize_results(state: AgentState) -> AgentState:
+    # (Unchanged from previous version)
     logger.info("--- Calling Summarizer ---")
     search_results = state.get("search_results"); original_query = state.get("query")
     error_message = state.get("error"); summary_text = None
@@ -243,12 +237,13 @@ def summarize_results(state: AgentState) -> AgentState:
         summary_text = response.content.strip()
         logger.info("LLM Summary generated.")
     except Exception as e:
-        summary_error = f"Summarization failed: {str(e)}"; logger.error(summary_error)
+        summary_error = f"Summarization failed: {str(e)}"; logger.error(summary_error, exc_info=True)
         error_message = (error_message + summary_error) if error_message else summary_error
         summary_text = "Sorry, I couldn't generate a summary."
     return {"summary": summary_text, "error": error_message, "history": state['history']}
 
 def call_chat_agent(state: AgentState) -> AgentState:
+    # (Unchanged from previous version)
     logger.info("--- Calling Chat Agent ---")
     query = state['query']; history = state['history']
     error_message = None; chat_response_text = "Sorry, I couldn't generate a response."
@@ -264,10 +259,11 @@ def call_chat_agent(state: AgentState) -> AgentState:
         chat_response_text = response.content.strip()
         logger.info(f"LLM chat response generated.")
     except Exception as e:
-        error_message = f"Chat generation failed: {str(e)}"; logger.error(error_message)
+        error_message = f"Chat generation failed: {str(e)}"; logger.error(error_message, exc_info=True)
     return {"chat_response": chat_response_text, "error": error_message, "history": history}
 
 def route_query(state: AgentState) -> AgentState:
+    # (Unchanged from previous version)
     logger.info("--- Calling Router ---")
     query = state['query']; logger.info(f"Routing query: {query}")
     prompt = ROUTING_PROMPT_TEMPLATE.format(query=query)
@@ -283,11 +279,12 @@ def route_query(state: AgentState) -> AgentState:
         else: logger.warning(f"Unexpected classification '{classification}'. Defaulting to Chat Agent.")
         return {"next_node": next_node_decision, "history": state['history']}
     except Exception as e:
-        logger.error(f"Error during LLM routing: {e}. Defaulting to Chat Agent.")
+        logger.error(f"Error during LLM routing: {e}. Defaulting to Chat Agent.", exc_info=True)
         return {"next_node": "chat_agent", "error": f"Routing error: {e}", "history": state['history']}
 
 # --- Conditional Edge Logic ---
 def decide_next_node(state: AgentState) -> str:
+    # (Unchanged from previous version)
     next_node = state.get("next_node")
     if next_node not in ["literature_agent", "chat_agent"]:
         logger.warning(f"Invalid next_node value '{next_node}'. Ending.")
@@ -295,6 +292,7 @@ def decide_next_node(state: AgentState) -> str:
     return next_node
 
 # --- Graph Definition ---
+# (Unchanged from previous version)
 graph_builder = StateGraph(AgentState)
 graph_builder.add_node("router", route_query)
 graph_builder.add_node("literature_agent", call_literature_agent)
@@ -312,61 +310,44 @@ app = graph_builder.compile()
 
 # --- Function to save results ---
 def save_output(run_dir: str, relative_path: str, data: Any):
-    """Saves data to a file relative to the run directory."""
-    # Ensure the directory for the file exists
+    # (Unchanged from previous version)
     filepath = os.path.join(run_dir, relative_path)
     try:
-        # Create subdirectory if relative_path includes one (like 'logs/')
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
-            if isinstance(data, str):
-                f.write(data)
-            else:
-                # Use default=str for potentially non-serializable items like history tuples
-                json.dump(data, f, indent=2, default=str)
+            if isinstance(data, str): f.write(data)
+            else: json.dump(data, f, indent=2, default=str)
         logger.info(f"Output saved to: {filepath}")
-    except Exception as e:
-        logger.error(f"Failed to save output to {filepath}: {e}")
-
+    except Exception as e: logger.error(f"Failed to save output to {filepath}: {e}", exc_info=True)
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
     # --- Setup Run Directory ---
-    WORKPLACE_DIR = "workplace"
-    os.makedirs(WORKPLACE_DIR, exist_ok=True)
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(WORKPLACE_DIR, f"{timestamp}_run")
-    logs_dir = os.path.join(run_dir, "logs")
-    results_dir = os.path.join(run_dir, "results")
-    temp_data_dir = os.path.join(run_dir, "temp_data")
-    os.makedirs(logs_dir, exist_ok=True)
-    os.makedirs(results_dir, exist_ok=True)
-    os.makedirs(temp_data_dir, exist_ok=True)
-
-    # --- Configure File Logging ---
-    log_filepath = os.path.join(logs_dir, "run.log")
-    file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
-    file_handler.setLevel(logging.INFO) # Log INFO level and above to file
-    # Use a standard format for the file log
-    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
-    file_handler.setFormatter(file_formatter)
-    logger.addHandler(file_handler) # Add file handler to our specific logger
-
-    logger.info("--- BioAgent Run Started ---")
-    logger.info(f"Run directory created: {run_dir}")
-    logger.info(f"File logging to: {log_filepath}")
-    logger.info(f"LLM Provider: {llm_provider}")
-    # -----------------------------
+    # (Unchanged from previous version)
+    WORKPLACE_DIR = "workplace"; run_dir = None
+    try:
+        os.makedirs(WORKPLACE_DIR, exist_ok=True)
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(WORKPLACE_DIR, f"{timestamp}_run")
+        logs_dir = os.path.join(run_dir, "logs"); results_dir = os.path.join(run_dir, "results")
+        temp_data_dir = os.path.join(run_dir, "temp_data")
+        os.makedirs(logs_dir, exist_ok=True); os.makedirs(results_dir, exist_ok=True); os.makedirs(temp_data_dir, exist_ok=True)
+        log_filepath = os.path.join(logs_dir, "run.log")
+        file_handler = logging.FileHandler(log_filepath, encoding='utf-8'); file_handler.setLevel(logging.INFO)
+        file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'); file_handler.setFormatter(file_formatter)
+        logger.addHandler(file_handler)
+        logger.info("--- BioAgent Run Started ---"); logger.info(f"Run directory created: {run_dir}")
+        logger.info(f"File logging to: {log_filepath}"); logger.info(f"LLM Provider: {llm_provider}")
+    except Exception as setup_e: logger.critical(f"Failed to set up run environment: {setup_e}", exc_info=True); sys.exit(1)
 
     conversation_state = {"history": [], "last_search_results": None, "last_summary": None}
     MAX_HISTORY_TURNS = 5
+    interaction_count = 0 # <<< Initialize interaction counter
 
     while True:
-        # Use colorama for input prompt
         try:
-            initial_query = input(f"\n{COLOR_INPUT}Enter your research query or message (or type 'quit'): {COLOR_RESET}")
-        except EOFError: # Handle Ctrl+D
-             initial_query = 'quit'
+            initial_query = input(f"\n{COLOR_INPUT}Enter query {interaction_count + 1} (or type 'quit'): {COLOR_RESET}")
+        except EOFError: initial_query = 'quit'
 
         if not initial_query.strip():
             print(f"{COLOR_WARN}Please enter a query or message.{COLOR_RESET}")
@@ -374,6 +355,9 @@ if __name__ == "__main__":
         if initial_query.lower() == 'quit':
             logger.info("Quit command received. Exiting.")
             break
+
+        interaction_count += 1 # <<< Increment counter for each valid interaction
+        logger.info(f"--- Starting Interaction #{interaction_count} ---")
 
         input_for_graph = {
             "query": initial_query, "history": conversation_state["history"],
@@ -387,28 +371,28 @@ if __name__ == "__main__":
             final_state = app.invoke(input_for_graph)
             logger.info("Graph execution complete.")
 
-            # Use direct print with colorama for user-facing final output
-            print(f"\n{COLOR_INFO}--- Agent Output ---{COLOR_RESET}")
-            agent_response = None # What we add to history
+            print(f"\n{COLOR_INFO}--- Agent Output (Interaction #{interaction_count}) ---{COLOR_RESET}")
+            agent_response = None
 
-            # Log full final state for debugging (uses file logger)
             try: logger.debug("Final State: %s", json.dumps(final_state, indent=2, default=str))
             except Exception as dump_e: logger.warning(f"Could not serialize final state for logging: {dump_e}")
 
             if final_state.get("error"):
                 error_msg = f"An error occurred: {final_state['error']}"
                 print(f"{COLOR_ERROR}{error_msg}{COLOR_RESET}")
-                # Log full error to file logger
                 logger.error(error_msg)
                 agent_response = f"Sorry, an error occurred."
+                # Save error state
+                save_output(run_dir, os.path.join("results", f"error_{interaction_count}.txt"), error_msg)
+
 
             if final_state.get("search_results"):
                 results = final_state["search_results"]
                 refined_query = final_state.get('refined_query', 'N/A')
                 print(f"{COLOR_OUTPUT}Found {len(results)} literature results (using refined query: '{refined_query}'):{COLOR_RESET}")
                 logger.info(f"Found {len(results)} results for refined query: '{refined_query}'")
-                # Fixed save path: specify relative path including subdir
-                save_output(run_dir, os.path.join("results", "search_results.json"), results)
+                # Use interaction count in filename
+                save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.json"), results)
 
                 conversation_state["last_search_results"] = results
                 conversation_state["last_summary"] = final_state.get("summary")
@@ -424,20 +408,23 @@ if __name__ == "__main__":
                     print(f"\n{COLOR_SUMMARY}--- Summary of Results ---{COLOR_RESET}")
                     print(f"{COLOR_SUMMARY}{summary}{COLOR_RESET}")
                     logger.info("Summary generated and displayed.")
-                    save_output(run_dir, os.path.join("results", "summary.txt"), summary)
+                    # Use interaction count in filename
+                    save_output(run_dir, os.path.join("results", f"summary_{interaction_count}.txt"), summary)
                     agent_response = summary
                 else:
                     no_summary_msg = f"I found {len(results)} results but couldn't generate a summary."
                     print(f"\n{COLOR_WARN}BioAgent: {no_summary_msg}{COLOR_RESET}")
                     logger.warning("Summary could not be generated.")
                     agent_response = no_summary_msg
-                    save_output(run_dir, os.path.join("results", "summary.txt"), no_summary_msg)
+                    # Use interaction count in filename
+                    save_output(run_dir, os.path.join("results", f"summary_{interaction_count}.txt"), no_summary_msg)
 
             elif final_state.get("chat_response"):
                 agent_response = final_state["chat_response"]
                 print(f"\n{COLOR_OUTPUT}BioAgent: {agent_response}{COLOR_RESET}")
                 logger.info("Chat response generated and displayed.")
-                save_output(run_dir, os.path.join("results", "chat_response.txt"), agent_response)
+                # Use interaction count in filename
+                save_output(run_dir, os.path.join("results", f"chat_response_{interaction_count}.txt"), agent_response)
                 conversation_state["last_search_results"] = None
                 conversation_state["last_summary"] = None
 
@@ -447,7 +434,8 @@ if __name__ == "__main__":
                  print(f"{COLOR_WARN}{no_results_msg}{COLOR_RESET}")
                  logger.info(f"No literature results found for refined query: '{refined_query}'")
                  agent_response = no_results_msg
-                 save_output(run_dir, os.path.join("results", "search_results.txt"), no_results_msg)
+                 # Use interaction count in filename
+                 save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.txt"), no_results_msg)
                  conversation_state["last_search_results"] = None
                  conversation_state["last_summary"] = None
 
@@ -456,7 +444,8 @@ if __name__ == "__main__":
                  print(f"{COLOR_WARN}{no_output_msg}{COLOR_RESET}")
                  logger.warning("Graph finished without error but no standard output produced.")
                  agent_response = no_output_msg
-                 save_output(run_dir, os.path.join("results", "output.txt"), no_output_msg)
+                 # Use interaction count in filename
+                 save_output(run_dir, os.path.join("results", f"output_{interaction_count}.txt"), no_output_msg)
                  conversation_state["last_search_results"] = None
                  conversation_state["last_summary"] = None
 
@@ -465,7 +454,7 @@ if __name__ == "__main__":
                  conversation_state["history"].append((initial_query, agent_response))
                  if len(conversation_state["history"]) > MAX_HISTORY_TURNS:
                      conversation_state["history"] = conversation_state["history"][-MAX_HISTORY_TURNS:]
-                 # Fixed save path: specify relative path including subdir
+                 # Save cumulative history (still overwrites previous history state for the run)
                  save_output(run_dir, os.path.join("logs", "conversation_history.json"), conversation_state["history"])
 
 
