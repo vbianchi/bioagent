@@ -1,6 +1,6 @@
 # BioAgent Co-Pilot (Working Title)
 
-A project to develop an agentic AI co-pilot for epidemiology and bioinformatics research tasks. It routes queries between chat and literature search intents. For literature searches, it refines the query, searches PubMed/ArXiv, and summarizes the results. Chat responses consider conversation history. The agent supports OpenAI, Google Gemini, and local Ollama models, configured via `config/settings.yaml`.
+A project to develop an agentic AI co-pilot for epidemiology and bioinformatics research tasks. It routes queries between chat and literature search intents. For literature searches, it refines the query, searches PubMed/ArXiv, and summarizes the results. Chat responses consider conversation history. The agent supports OpenAI, Google Gemini, and local Ollama models, configured via `config/settings.yaml`. Each run creates a timestamped folder in the `workplace/` directory containing logs and results. Console output is colored for readability.
 
 ## Description
 
@@ -25,30 +25,26 @@ This project uses `uv` for environment and package management.
     source .venv/bin/activate
     ```
 3.  **Install dependencies:**
-    Create or update the `requirements.txt` file with the content specified in this document. **Note the change from `langchain-community` to `langchain-ollama`**.
     ```bash
-    # Ensure old community version potentially installed is removed if causing conflicts
-    # uv pip uninstall langchain-community
     uv pip install -r requirements.txt
     ```
 4.  **Configuration File (`config/settings.yaml`):**
     * Ensure the `config/` directory exists.
-    * Create or update `config/settings.yaml` with the content provided in this document.
-    * **Choose your LLM Provider:** Edit the `llm_provider` setting to `"openai"`, `"gemini"`, or `"ollama"`.
-    * **Set Model Names:** Adjust the corresponding model name setting (e.g., `openai_model_name`, `gemini_model_name`, `ollama_model_name`). The default for Ollama is now `gemma3`. For Ollama, ensure the model is pulled locally.
+    * Create or update `config/settings.yaml`.
+    * **Choose LLM Provider:** Edit `llm_provider` setting (`openai`, `gemini`, `ollama`).
+    * **Set Model Names:** Adjust corresponding model name setting. Default Ollama model is `gemma3`. Ensure model is pulled locally if using Ollama.
 5.  **API Keys & Environment (`.env`):**
     * Create or update `.env` in the root directory.
-    * **OpenAI:** If using `openai`, add `OPENAI_API_KEY='...'`.
-    * **Gemini:** If using `gemini`, add `GOOGLE_API_KEY='...'`.
-    * **NCBI Entrez:** Add `ENTREZ_EMAIL='your.email@example.com'`.
+    * Add required keys (`OPENAI_API_KEY`, `GOOGLE_API_KEY` depending on provider).
+    * Add `ENTREZ_EMAIL='your.email@example.com'`.
     * Ensure `.env` is listed in `.gitignore`.
 6.  **Ollama Setup (if using `ollama` provider):**
-    * Install and run Ollama locally: [https://ollama.com/](https://ollama.com/)
-    * Pull the desired model specified in `config/settings.yaml`: e.g., `ollama pull gemma3`
+    * Install and run Ollama: [https://ollama.com/](https://ollama.com/)
+    * Pull the desired model: e.g., `ollama pull gemma3`
 
 ## Usage
 
-Activate the environment (`source .venv/bin/activate`). **Run the script from the project's root directory**:
+Activate the environment (`source .venv/bin/activate`). **Run from the project's root directory**:
 
 ```bash
 python -m src.main
@@ -56,12 +52,19 @@ python -m src.main
 
 *```(Using python -m src.main ensures that Python can correctly find the src package for imports like from src.core.config_loader import ...)```*
 
-The script initializes the LLM specified in `config/settings.yaml` and prompts for input in a loop (type 'quit' to exit). It classifies input:
--   If 'literature_search', it refines the query, searches PubMed/ArXiv, displays results, and provides a summary.
--   If 'chat', it routes to the chat function which uses the LLM and conversation history to respond.
--   If you press Enter with no input, it will now prompt you again instead of processing an empty query. *`(Note: Quality depends on the LLM and prompts in config/settings.yaml.)`*
+The script initializes the agent and prompts for input. Each run creates a new directory in `workplace/` named `YYYYMMDD_HHMMSS_run/`. This directory contains:
+-   `logs/run.log`: Detailed log of the agent's operations for that run.
+-   `results/`: Output files like `search_results.json` or `summary.txt`.
+-   `temp_data/`: Placeholder for any intermediate files (currently unused).
+
+The agent classifies input:
+-   'literature_search': Refines query, searches PubMed/ArXiv, displays results, summarizes, saves outputs to the run directory.
+-   'chat': Generates a response using history, saves response to the run directory.
+-   Empty input: Prompts again.
+-   'quit': Exits the session.
 
 ## Project Structure
+```
 ├── .venv/            # Virtual environment managed by uv
 ├── config/           # Configuration files
 │   └── settings.yaml # Agent settings and prompts
@@ -76,9 +79,17 @@ The script initializes the LLM specified in `config/settings.yaml` and prompts f
 │   ├── tools/        # Wrappers for external APIs - TODO Refactor
 │   └── main.py       # Main application entry point
 ├── tests/            # Unit and integration tests
+├── workplace/        # Timestamped directories for each run (IGNORED BY GIT)
+│   └── YYYYMMDD_HHMMSS_run/
+│       ├── logs/
+│       │   └── run.log
+│       ├── results/
+│       │   └── (e.g., search_results.json, summary.txt)
+│       └── temp_data/
 ├── .gitignore        # Files and directories ignored by Git
 ├── requirements.txt  # Project dependencies
-└── README.md         # This file
+└── README.md         # This file       # This file
+```
 
 ## Contributing
 (Add contribution guidelines if applicable.)

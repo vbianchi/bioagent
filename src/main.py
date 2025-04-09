@@ -1,7 +1,12 @@
 import os
 import sys
 import json
+import datetime
+import logging
 from typing import TypedDict, List, Dict, Any, Optional, Tuple
+
+# Import colorama
+from colorama import init as colorama_init, Fore, Style
 
 from dotenv import load_dotenv
 
@@ -16,8 +21,55 @@ import arxiv
 # Import config loader
 from src.core.config_loader import load_config, get_config_value
 
+# --- Initialize Colorama ---
+colorama_init(autoreset=True)
+
+# --- Color Scheme ---
+COLOR_INFO = Fore.CYAN
+COLOR_INPUT = Fore.YELLOW
+COLOR_OUTPUT = Fore.GREEN
+COLOR_SUMMARY = Fore.MAGENTA
+COLOR_ERROR = Fore.RED
+COLOR_WARN = Fore.YELLOW
+COLOR_DEBUG = Fore.BLUE
+COLOR_RESET = Style.RESET_ALL
+
+# --- Custom Colored Logging Formatter ---
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter to add colors to log levels for console output."""
+    LOG_COLORS = {
+        logging.DEBUG: COLOR_DEBUG,
+        logging.INFO: COLOR_INFO,
+        logging.WARNING: COLOR_WARN,
+        logging.ERROR: COLOR_ERROR,
+        logging.CRITICAL: Fore.RED + Style.BRIGHT,
+    }
+
+    def format(self, record):
+        log_color = self.LOG_COLORS.get(record.levelno, COLOR_RESET)
+        # Basic format, you can customize this further
+        log_fmt = f"{log_color}{record.levelname}: {record.getMessage()}{COLOR_RESET}"
+        # Optionally add timestamp etc. back if needed for console
+        # log_fmt = f"{log_color}{self.formatTime(record, self.datefmt)} - {record.levelname} - {record.getMessage()}{COLOR_RESET}"
+        return log_fmt
+
+# --- Basic Logging Setup ---
+# Root logger setup for basic configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__) # Get logger for this module
+logger.propagate = False # Prevent root logger from duplicating console messages
+
+# Console Handler (StreamHandler) with colored output
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.INFO) # Set level for console output
+console_handler.setFormatter(ColoredFormatter())
+logger.addHandler(console_handler)
+
+# File handler will be added later in main block
+
 # --- Configuration Loading ---
-config = load_config() # Load config from config/settings.yaml
+config = load_config()
+logger.info("Configuration loaded.") # This will now be colored on console
 
 # --- Environment Setup ---
 load_dotenv()
@@ -25,65 +77,58 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 ENTREZ_EMAIL = os.getenv("ENTREZ_EMAIL")
 
-if not ENTREZ_EMAIL: sys.exit("Error: ENTREZ_EMAIL not found in .env file. Please add it.")
+if not ENTREZ_EMAIL: logger.critical("ENTREZ_EMAIL not found in .env file. Please add it."); sys.exit(1)
 Entrez.email = ENTREZ_EMAIL
+logger.info(f"Entrez Email set to: {ENTREZ_EMAIL}")
 
 # --- LLM Instantiation based on Config ---
 llm_provider = get_config_value(config, "llm_provider", "openai").lower()
 llm_temp = get_config_value(config, "llm_settings.temperature", 0)
 llm = None
 
-print(f"Attempting to initialize LLM provider: {llm_provider}")
+logger.info(f"Attempting to initialize LLM provider: {llm_provider}")
 
 if llm_provider == "openai":
     from langchain_openai import ChatOpenAI
-    if not OPENAI_API_KEY: sys.exit("Error: LLM provider is 'openai' but OPENAI_API_KEY not found in .env file.")
+    if not OPENAI_API_KEY: logger.critical("LLM provider is 'openai' but OPENAI_API_KEY not found."); sys.exit(1)
     llm_model = get_config_value(config, "llm_settings.openai_model_name", "gpt-3.5-turbo")
     try:
         llm = ChatOpenAI(model=llm_model, temperature=llm_temp, openai_api_key=OPENAI_API_KEY)
-        print(f"LLM Initialized: OpenAI (model={llm_model}, temperature={llm_temp})")
-    except Exception as e:
-        sys.exit(f"Error initializing OpenAI LLM: {e}")
-
+        logger.info(f"LLM Initialized: OpenAI (model={llm_model}, temperature={llm_temp})")
+    except Exception as e: logger.critical(f"Error initializing OpenAI LLM: {e}"); sys.exit(1)
 elif llm_provider == "gemini":
     from langchain_google_genai import ChatGoogleGenerativeAI
-    if not GOOGLE_API_KEY: sys.exit("Error: LLM provider is 'gemini' but GOOGLE_API_KEY not found in .env file.")
+    if not GOOGLE_API_KEY: logger.critical("LLM provider is 'gemini' but GOOGLE_API_KEY not found."); sys.exit(1)
     llm_model = get_config_value(config, "llm_settings.gemini_model_name", "gemini-1.5-flash-latest")
     try:
         llm = ChatGoogleGenerativeAI(model=llm_model, temperature=llm_temp, google_api_key=GOOGLE_API_KEY)
-        print(f"LLM Initialized: Google Gemini (model={llm_model}, temperature={llm_temp})")
-    except Exception as e:
-        sys.exit(f"Error initializing Google Gemini LLM: {e}")
-
+        logger.info(f"LLM Initialized: Google Gemini (model={llm_model}, temperature={llm_temp})")
+    except Exception as e: logger.critical(f"Error initializing Google Gemini LLM: {e}"); sys.exit(1)
 elif llm_provider == "ollama":
-    try:
-        from langchain_ollama import ChatOllama
-    except ImportError:
-        sys.exit("Error: langchain-ollama package not found. Please install it: pip install langchain-ollama")
-    # Use updated default from config
+    try: from langchain_ollama import ChatOllama
+    except ImportError: logger.critical("langchain-ollama package not found. Run: pip install langchain-ollama"); sys.exit(1)
     llm_model = get_config_value(config, "llm_settings.ollama_model_name", "gemma3")
     ollama_base_url = get_config_value(config, "llm_settings.ollama_base_url")
     try:
         init_params = {"model": llm_model, "temperature": llm_temp}
-        if ollama_base_url:
-            init_params["base_url"] = ollama_base_url
+        if ollama_base_url: init_params["base_url"] = ollama_base_url
         llm = ChatOllama(**init_params)
-        llm.invoke("test connection") # Test connection
-        print(f"LLM Initialized: Ollama (model={llm_model}, temperature={llm_temp}, base_url={ollama_base_url or 'default'})")
+        llm.invoke("test connection")
+        logger.info(f"LLM Initialized: Ollama (model={llm_model}, temperature={llm_temp}, base_url={ollama_base_url or 'default'})")
     except Exception as e:
-        print(f"Error initializing or connecting to Ollama LLM: {e}")
-        print(f"Please ensure the Ollama service is running and the specified model ('{llm_model}') is available.")
+        logger.critical(f"Error initializing or connecting to Ollama LLM: {e}")
+        logger.critical(f"Ensure Ollama is running and model '{llm_model}' is available.")
         sys.exit(1)
-
 else:
-    sys.exit(f"Error: Unknown llm_provider '{llm_provider}'. Use 'openai', 'gemini', or 'ollama'.")
+    logger.critical(f"Unknown llm_provider '{llm_provider}'. Use 'openai', 'gemini', or 'ollama'.")
+    sys.exit(1)
 
 # --- Search Settings from Config ---
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
 MAX_RESULTS_PUBMED = MAX_RESULTS_PER_SOURCE
 MAX_RESULTS_ARXIV = MAX_RESULTS_PER_SOURCE
-print(f"Search settings: max_results_per_source={MAX_RESULTS_PER_SOURCE}, max_abstracts_to_summarize={MAX_ABSTRACTS_TO_SUMMARIZE}")
+logger.info(f"Search settings: max_results_per_source={MAX_RESULTS_PER_SOURCE}, max_abstracts_to_summarize={MAX_ABSTRACTS_TO_SUMMARIZE}")
 
 # --- Prompt Templates from Config ---
 ROUTING_PROMPT_TEMPLATE = get_config_value(config, "prompts.routing_prompt", "Error: Routing prompt not found.")
@@ -103,17 +148,16 @@ class AgentState(TypedDict):
 
 # --- Helper Functions for Literature Search ---
 def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
-    print(f"Searching PubMed for '{query}' (max_results={max_results})...")
+    logger.info(f"Searching PubMed for '{query}' (max_results={max_results})...")
     results = []
     try:
         handle = Entrez.esearch(db="pubmed", term=query, retmax=max_results)
-        search_results_entrez = Entrez.read(handle)
-        handle.close()
+        search_results_entrez = Entrez.read(handle); handle.close()
         id_list = search_results_entrez["IdList"]
-        if not id_list: return []
-        print(f"Found {len(id_list)} PMIDs on PubMed. Fetching details...")
+        if not id_list: logger.info("No results found on PubMed."); return []
+        logger.info(f"Found {len(id_list)} PMIDs on PubMed. Fetching details...")
         handle = Entrez.efetch(db="pubmed", id=id_list, rettype="medline", retmode="text")
-        records = Medline.parse(handle)
+        records = Medline.parse(handle); handle.close()
         for record in records:
             results.append({
                 "id": record.get("PMID", "N/A"), "source": "PubMed",
@@ -122,20 +166,19 @@ def _search_pubmed(query: str, max_results: int) -> List[Dict[str, Any]]:
                 "journal": record.get("JT", "N/A"), "authors": record.get("AU", []),
                 "url": f"https://pubmed.ncbi.nlm.nih.gov/{record.get('PMID', '')}/"
             })
-        handle.close()
-        print(f"Successfully fetched/parsed {len(results)} PubMed records.")
-    except Exception as e: print(f"Error during PubMed search: {e}")
+        logger.info(f"Successfully fetched/parsed {len(results)} PubMed records.")
+    except Exception as e: logger.error(f"Error during PubMed search: {e}")
     return results
 
 def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
-    print(f"Searching ArXiv for '{query}' (max_results={max_results})...")
+    logger.info(f"Searching ArXiv for '{query}' (max_results={max_results})...")
     results = []
     try:
         client = arxiv.Client()
         search = arxiv.Search(query=query, max_results=max_results, sort_by=arxiv.SortCriterion.Relevance)
         arxiv_results = list(client.results(search))
-        if not arxiv_results: return []
-        print(f"Found {len(arxiv_results)} results on ArXiv.")
+        if not arxiv_results: logger.info("No results found on ArXiv."); return []
+        logger.info(f"Found {len(arxiv_results)} results on ArXiv.")
         for result in arxiv_results:
             results.append({
                 "id": result.entry_id.split('/')[-1], "source": "ArXiv",
@@ -143,31 +186,31 @@ def _search_arxiv(query: str, max_results: int) -> List[Dict[str, Any]]:
                 "authors": [str(author) for author in result.authors],
                 "published": str(result.published), "url": result.pdf_url
             })
-    except Exception as e: print(f"Error during ArXiv search: {e}")
+    except Exception as e: logger.error(f"Error during ArXiv search: {e}")
     return results
 
 # --- Agent Nodes ---
 def call_literature_agent(state: AgentState) -> AgentState:
-    print("--- Calling Literature Agent ---")
+    logger.info("--- Calling Literature Agent ---")
     original_query = state['query']
-    error_message = None
-    refined_query_for_search = original_query
+    logger.info(f"Received original query: {original_query}")
+    error_message = None; refined_query_for_search = original_query
     try:
-        print("Refining query for literature search...")
+        logger.info("Refining query for literature search...")
         refinement_prompt = REFINEMENT_PROMPT_TEMPLATE.format(query=original_query)
         try:
             refinement_response = llm.invoke(refinement_prompt)
             refined_query_for_search = refinement_response.content.strip()
-            print(f"Refined query: {refined_query_for_search}")
+            logger.info(f"Refined query: {refined_query_for_search}")
         except Exception as refine_e:
-            print(f"Warning: LLM query refinement failed: {refine_e}. Using original query.")
+            logger.warning(f"LLM query refinement failed: {refine_e}. Using original query.")
             error_message = f"Query refinement failed: {refine_e}. "
         pubmed_results = _search_pubmed(refined_query_for_search, MAX_RESULTS_PUBMED)
         arxiv_results = _search_arxiv(refined_query_for_search, MAX_RESULTS_ARXIV)
         combined_results = pubmed_results + arxiv_results
-        print(f"Total combined results: {len(combined_results)}")
+        logger.info(f"Total combined results: {len(combined_results)}")
     except Exception as e:
-        search_error = f"Literature search failed: {str(e)}"
+        search_error = f"Literature search failed: {str(e)}"; logger.error(search_error)
         error_message = (error_message + search_error) if error_message else search_error
         combined_results = []
     return {
@@ -176,76 +219,80 @@ def call_literature_agent(state: AgentState) -> AgentState:
     }
 
 def summarize_results(state: AgentState) -> AgentState:
-    print("--- Calling Summarizer ---")
-    search_results = state.get("search_results")
-    original_query = state.get("query")
-    error_message = state.get("error")
-    summary_text = None
+    logger.info("--- Calling Summarizer ---")
+    search_results = state.get("search_results"); original_query = state.get("query")
+    error_message = state.get("error"); summary_text = None
     if not search_results:
+        logger.info("No search results to summarize.")
         return {"summary": None, "error": error_message, "history": state['history']}
     abstracts_to_summarize = []
-    print(f"Preparing abstracts for summarization (max {MAX_ABSTRACTS_TO_SUMMARIZE})...")
+    logger.info(f"Preparing abstracts for summarization (max {MAX_ABSTRACTS_TO_SUMMARIZE})...")
     for i, result in enumerate(search_results):
         if i >= MAX_ABSTRACTS_TO_SUMMARIZE: break
         abstract = result.get("abstract")
         if abstract and abstract != "No abstract found":
             abstracts_to_summarize.append(f"Abstract {i+1} (Source: {result.get('source', 'N/A')}, ID: {result.get('id', 'N/A')}):\n{abstract}\n")
     if not abstracts_to_summarize:
+        logger.info("No valid abstracts found in results to summarize.")
         return {"summary": "No abstracts available to summarize.", "error": error_message, "history": state['history']}
     abstracts_text = "\n---\n".join(abstracts_to_summarize)
     summarization_prompt = SUMMARIZATION_PROMPT_TEMPLATE.format(query=original_query, abstracts_text=abstracts_text)
-    print(f"Sending {len(abstracts_to_summarize)} abstracts to LLM for summarization...")
+    logger.info(f"Sending {len(abstracts_to_summarize)} abstracts to LLM for summarization...")
     try:
         response = llm.invoke(summarization_prompt)
         summary_text = response.content.strip()
-        print("LLM Summary generated.")
+        logger.info("LLM Summary generated.")
     except Exception as e:
-        summary_error = f"Summarization failed: {str(e)}"
+        summary_error = f"Summarization failed: {str(e)}"; logger.error(summary_error)
         error_message = (error_message + summary_error) if error_message else summary_error
         summary_text = "Sorry, I couldn't generate a summary."
     return {"summary": summary_text, "error": error_message, "history": state['history']}
 
 def call_chat_agent(state: AgentState) -> AgentState:
-    print("--- Calling Chat Agent ---")
-    query = state['query']
-    history = state['history']
-    error_message = None
-    chat_response_text = "Sorry, I couldn't generate a response."
+    logger.info("--- Calling Chat Agent ---")
+    query = state['query']; history = state['history']
+    error_message = None; chat_response_text = "Sorry, I couldn't generate a response."
     formatted_history = []
     for user_msg, ai_msg in history:
         formatted_history.append(HumanMessage(content=user_msg))
         formatted_history.append(AIMessage(content=ai_msg))
     formatted_history.append(HumanMessage(content=query))
-    print(f"Using history (last {len(history)} turns)")
+    logger.info(f"Received query: {query}")
+    logger.info(f"Using history (last {len(history)} turns)")
     try:
         response = llm.invoke(formatted_history)
         chat_response_text = response.content.strip()
-        print(f"LLM chat response: {chat_response_text}")
+        logger.info(f"LLM chat response generated.")
     except Exception as e:
-        error_message = f"Chat generation failed: {str(e)}"
+        error_message = f"Chat generation failed: {str(e)}"; logger.error(error_message)
     return {"chat_response": chat_response_text, "error": error_message, "history": history}
 
 def route_query(state: AgentState) -> AgentState:
-    print("--- Calling Router ---")
-    query = state['query']
+    logger.info("--- Calling Router ---")
+    query = state['query']; logger.info(f"Routing query: {query}")
     prompt = ROUTING_PROMPT_TEMPLATE.format(query=query)
     try:
         response = llm.invoke(prompt)
         classification = response.content.strip().lower().replace("'", "").replace('"', '')
-        print(f"LLM Classification: {classification}")
+        logger.info(f"LLM Classification: {classification}")
         next_node_decision = "chat_agent"
-        if classification == "literature_search": next_node_decision = "literature_agent"
-        elif classification == "chat": next_node_decision = "chat_agent"
-        else: print(f"Warning: Unexpected classification '{classification}'. Defaulting to Chat Agent.")
+        if classification == "literature_search":
+            logger.info("Routing to Literature Agent."); next_node_decision = "literature_agent"
+        elif classification == "chat":
+             logger.info("Routing to Chat Agent."); next_node_decision = "chat_agent"
+        else: logger.warning(f"Unexpected classification '{classification}'. Defaulting to Chat Agent.")
         return {"next_node": next_node_decision, "history": state['history']}
     except Exception as e:
-        print(f"Error during LLM routing: {e}. Defaulting to Chat Agent.")
+        logger.error(f"Error during LLM routing: {e}. Defaulting to Chat Agent.")
         return {"next_node": "chat_agent", "error": f"Routing error: {e}", "history": state['history']}
 
 # --- Conditional Edge Logic ---
 def decide_next_node(state: AgentState) -> str:
     next_node = state.get("next_node")
-    return next_node if next_node in ["literature_agent", "chat_agent"] else END
+    if next_node not in ["literature_agent", "chat_agent"]:
+        logger.warning(f"Invalid next_node value '{next_node}'. Ending.")
+        return END
+    return next_node
 
 # --- Graph Definition ---
 graph_builder = StateGraph(AgentState)
@@ -263,78 +310,174 @@ graph_builder.add_edge("summarizer", END)
 graph_builder.add_edge("chat_agent", END)
 app = graph_builder.compile()
 
+# --- Function to save results ---
+def save_output(run_dir: str, relative_path: str, data: Any):
+    """Saves data to a file relative to the run directory."""
+    # Ensure the directory for the file exists
+    filepath = os.path.join(run_dir, relative_path)
+    try:
+        # Create subdirectory if relative_path includes one (like 'logs/')
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            if isinstance(data, str):
+                f.write(data)
+            else:
+                # Use default=str for potentially non-serializable items like history tuples
+                json.dump(data, f, indent=2, default=str)
+        logger.info(f"Output saved to: {filepath}")
+    except Exception as e:
+        logger.error(f"Failed to save output to {filepath}: {e}")
+
+
 # --- Main Execution Block ---
 if __name__ == "__main__":
-    print("BioAgent Co-Pilot Initializing...")
-    print(f"Using Entrez Email: {Entrez.email}")
+    # --- Setup Run Directory ---
+    WORKPLACE_DIR = "workplace"
+    os.makedirs(WORKPLACE_DIR, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = os.path.join(WORKPLACE_DIR, f"{timestamp}_run")
+    logs_dir = os.path.join(run_dir, "logs")
+    results_dir = os.path.join(run_dir, "results")
+    temp_data_dir = os.path.join(run_dir, "temp_data")
+    os.makedirs(logs_dir, exist_ok=True)
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(temp_data_dir, exist_ok=True)
+
+    # --- Configure File Logging ---
+    log_filepath = os.path.join(logs_dir, "run.log")
+    file_handler = logging.FileHandler(log_filepath, encoding='utf-8')
+    file_handler.setLevel(logging.INFO) # Log INFO level and above to file
+    # Use a standard format for the file log
+    file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler) # Add file handler to our specific logger
+
+    logger.info("--- BioAgent Run Started ---")
+    logger.info(f"Run directory created: {run_dir}")
+    logger.info(f"File logging to: {log_filepath}")
+    logger.info(f"LLM Provider: {llm_provider}")
+    # -----------------------------
+
     conversation_state = {"history": [], "last_search_results": None, "last_summary": None}
     MAX_HISTORY_TURNS = 5
+
     while True:
-        initial_query = input("\nEnter your research query or message (or type 'quit'): ")
-        # --- Handle Empty Input ---
+        # Use colorama for input prompt
+        try:
+            initial_query = input(f"\n{COLOR_INPUT}Enter your research query or message (or type 'quit'): {COLOR_RESET}")
+        except EOFError: # Handle Ctrl+D
+             initial_query = 'quit'
+
         if not initial_query.strip():
-            print("Please enter a query or message.")
-            continue # Skip graph invocation for empty input
-        # --- ---
-        if initial_query.lower() == 'quit': break
+            print(f"{COLOR_WARN}Please enter a query or message.{COLOR_RESET}")
+            continue
+        if initial_query.lower() == 'quit':
+            logger.info("Quit command received. Exiting.")
+            break
+
         input_for_graph = {
             "query": initial_query, "history": conversation_state["history"],
             "refined_query": None, "search_results": None, "summary": None,
             "chat_response": None, "error": None, "next_node": None
         }
-        print("\nInvoking the agent graph...")
+
+        logger.info(f"Invoking agent graph for query: {initial_query}")
         final_state = None
         try:
             final_state = app.invoke(input_for_graph)
-            print("\n--- Graph Execution Complete ---")
-            print("Final State Output:")
-            agent_response = None
+            logger.info("Graph execution complete.")
+
+            # Use direct print with colorama for user-facing final output
+            print(f"\n{COLOR_INFO}--- Agent Output ---{COLOR_RESET}")
+            agent_response = None # What we add to history
+
+            # Log full final state for debugging (uses file logger)
+            try: logger.debug("Final State: %s", json.dumps(final_state, indent=2, default=str))
+            except Exception as dump_e: logger.warning(f"Could not serialize final state for logging: {dump_e}")
+
             if final_state.get("error"):
-                print(f"An error occurred: {final_state['error']}")
-                agent_response = f"Sorry, an error occurred: {final_state['error']}"
+                error_msg = f"An error occurred: {final_state['error']}"
+                print(f"{COLOR_ERROR}{error_msg}{COLOR_RESET}")
+                # Log full error to file logger
+                logger.error(error_msg)
+                agent_response = f"Sorry, an error occurred."
+
             if final_state.get("search_results"):
                 results = final_state["search_results"]
-                print(f"Found {len(results)} literature results (using refined query: '{final_state.get('refined_query', 'N/A')}'):")
+                refined_query = final_state.get('refined_query', 'N/A')
+                print(f"{COLOR_OUTPUT}Found {len(results)} literature results (using refined query: '{refined_query}'):{COLOR_RESET}")
+                logger.info(f"Found {len(results)} results for refined query: '{refined_query}'")
+                # Fixed save path: specify relative path including subdir
+                save_output(run_dir, os.path.join("results", "search_results.json"), results)
+
                 conversation_state["last_search_results"] = results
                 conversation_state["last_summary"] = final_state.get("summary")
+
                 for i, result in enumerate(results):
-                    print(f"\n--- Result {i+1} ({result.get('source', 'N/A')}) ---")
-                    print(f"  Title: {result.get('title', 'N/A')}")
+                    print(f"\n{Style.BRIGHT}--- Result {i+1} ({result.get('source', 'N/A')}) ---{Style.NORMAL}")
+                    print(f"{COLOR_OUTPUT}  Title: {result.get('title', 'N/A')}{COLOR_RESET}")
                     print(f"  ID: {result.get('id', 'N/A')}")
                     print(f"  URL: {result.get('url', '#')}")
+
                 if final_state.get("summary"):
-                    print("\n--- Summary of Results ---")
-                    print(final_state["summary"])
-                    agent_response = final_state["summary"]
+                    summary = final_state["summary"]
+                    print(f"\n{COLOR_SUMMARY}--- Summary of Results ---{COLOR_RESET}")
+                    print(f"{COLOR_SUMMARY}{summary}{COLOR_RESET}")
+                    logger.info("Summary generated and displayed.")
+                    save_output(run_dir, os.path.join("results", "summary.txt"), summary)
+                    agent_response = summary
                 else:
-                    agent_response = f"I found {len(results)} results but couldn't generate a summary."
-                    print(f"\nBioAgent: {agent_response}")
+                    no_summary_msg = f"I found {len(results)} results but couldn't generate a summary."
+                    print(f"\n{COLOR_WARN}BioAgent: {no_summary_msg}{COLOR_RESET}")
+                    logger.warning("Summary could not be generated.")
+                    agent_response = no_summary_msg
+                    save_output(run_dir, os.path.join("results", "summary.txt"), no_summary_msg)
+
             elif final_state.get("chat_response"):
                 agent_response = final_state["chat_response"]
-                print(f"\nBioAgent: {agent_response}")
+                print(f"\n{COLOR_OUTPUT}BioAgent: {agent_response}{COLOR_RESET}")
+                logger.info("Chat response generated and displayed.")
+                save_output(run_dir, os.path.join("results", "chat_response.txt"), agent_response)
                 conversation_state["last_search_results"] = None
                 conversation_state["last_summary"] = None
+
             elif final_state.get("next_node") == "literature_agent" and not final_state.get("error"):
-                 no_results_msg = f"No literature results found from PubMed or ArXiv for refined query: '{final_state.get('refined_query', 'N/A')}'"
-                 print(no_results_msg)
+                 refined_query = final_state.get('refined_query', 'N/A')
+                 no_results_msg = f"No literature results found from PubMed or ArXiv for refined query: '{refined_query}'"
+                 print(f"{COLOR_WARN}{no_results_msg}{COLOR_RESET}")
+                 logger.info(f"No literature results found for refined query: '{refined_query}'")
                  agent_response = no_results_msg
-                 conversation_state["last_search_results"] = None
-                 conversation_state["last_summary"] = None
-            elif not final_state.get("error"):
-                 no_output_msg = "No specific output generated."
-                 print(no_output_msg)
-                 agent_response = no_output_msg
+                 save_output(run_dir, os.path.join("results", "search_results.txt"), no_results_msg)
                  conversation_state["last_search_results"] = None
                  conversation_state["last_summary"] = None
 
+            elif not final_state.get("error"):
+                 no_output_msg = "No specific output generated."
+                 print(f"{COLOR_WARN}{no_output_msg}{COLOR_RESET}")
+                 logger.warning("Graph finished without error but no standard output produced.")
+                 agent_response = no_output_msg
+                 save_output(run_dir, os.path.join("results", "output.txt"), no_output_msg)
+                 conversation_state["last_search_results"] = None
+                 conversation_state["last_summary"] = None
+
+            # --- Update History ---
             if agent_response is not None:
                  conversation_state["history"].append((initial_query, agent_response))
                  if len(conversation_state["history"]) > MAX_HISTORY_TURNS:
                      conversation_state["history"] = conversation_state["history"][-MAX_HISTORY_TURNS:]
+                 # Fixed save path: specify relative path including subdir
+                 save_output(run_dir, os.path.join("logs", "conversation_history.json"), conversation_state["history"])
+
+
         except Exception as e:
-            print(f"\nAn unexpected error occurred during graph invocation: {e}")
+            error_msg = f"An unexpected error occurred during graph invocation: {e}"
+            print(f"\n{COLOR_ERROR}{error_msg}{COLOR_RESET}")
+            logger.exception(error_msg)
             try:
                 state_at_error = final_state if final_state is not None else input_for_graph
-                print("State at time of error:", json.dumps(state_at_error, indent=2, default=str))
-            except Exception as dump_e: print(f"Could not retrieve or serialize state at time of error: {dump_e}")
-    print("\nBioAgent session ended.")
+                logger.error("State at time of error: %s", json.dumps(state_at_error, indent=2, default=str))
+            except Exception as dump_e:
+                 logger.error(f"Could not retrieve or serialize state at time of error: {dump_e}")
+
+    logger.info("--- BioAgent Run Ended ---")
+    print(f"\n{COLOR_INFO}BioAgent session ended.{COLOR_RESET}")

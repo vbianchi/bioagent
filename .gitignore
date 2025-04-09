@@ -22,6 +22,8 @@ dist/
 
 # Log files
 *.log
+# Ignore the entire workplace directory
+workplace/
 
 # Temporary files
 *.swp

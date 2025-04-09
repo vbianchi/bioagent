@@ -6,5 +6,5 @@ biopython
 arxiv
 PyYAML
 langchain-google-genai
-# langchain-community # Replaced by langchain-ollama
 langchain-ollama
+colorama
