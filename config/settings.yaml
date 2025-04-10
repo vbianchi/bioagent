@@ -1,7 +1,7 @@
 # Configuration settings for the BioAgent
 
 # LLM Provider ('openai', 'gemini', 'ollama')
-llm_provider: "gemini" # CHANGE THIS to 'gemini' or 'ollama' as needed
+llm_provider: "gemini" # CHANGE THIS to 'gemini', 'openai', 'ollama' as needed
 
 # General LLM Settings (Used for routing, chat, refinement, summarization unless overridden)
 llm_settings:
@@ -13,7 +13,7 @@ llm_settings:
 # Coding Agent LLM Settings
 coding_agent_settings:
   # Provider for coding tasks. Use 'default' to use the main llm_provider above.
-  llm_provider: "gemini"
+  llm_provider: "default"
   # --- Provider-specific models optimized for coding ---
   openai_model_name: "gpt-4-turbo-preview" # Suggest stronger model for coding
   gemini_model_name: "gemini-2.0-flash" # Suggest stronger model for coding
