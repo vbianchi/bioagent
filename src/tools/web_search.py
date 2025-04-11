@@ -1,62 +1,63 @@
 import logging
 from typing import List, Dict, Any
 
-# Assume the google_search tool is available via an API call mechanism
-# In this example, we simulate it with a placeholder.
-# Replace this with the actual tool call when integrating.
-# from your_tool_library import google_search_tool # Example import
+# This module now relies on the actual google_search tool object being passed in.
 
 logger = logging.getLogger(__name__)
 
-# Placeholder for the actual google_search tool call
-# This function needs to be replaced with the real tool interaction
-def _call_google_search_api(query: str, num_results: int) -> List[Dict[str, Any]]:
-    """Placeholder function simulating a Google Search API call."""
-    logger.warning("Using placeholder Google Search API!")
-    # Simulate finding some results
-    results = []
-    for i in range(num_results):
-        results.append({
-            "title": f"Simulated Google Result {i+1} for '{query}'",
-            "link": f"https://example.com/search?q={query.replace(' ', '+')}&result={i+1}",
-            "snippet": f"This is a simulated snippet for result {i+1} about {query}. Real results would contain relevant text excerpts from web pages."
-        })
-    # Simulate finding no results sometimes
-    # import random
-    # if random.random() < 0.1: return []
-    return results
+def search_google(query: str, search_tool: Any, num_results: int = 5) -> List[Dict[str, Any]]:
+    """
+    Performs a Google search for the given query using the provided search tool object
+    and returns formatted results.
 
-def search_google(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
+    Args:
+        query: The search query string.
+        search_tool: The actual google_search tool object provided by the environment.
+        num_results: The desired number of results.
+
+    Returns:
+        A list of dictionaries, each containing 'title', 'link', 'snippet', 'source',
+        or a list containing an error dictionary if failed.
     """
-    Performs a Google search for the given query and returns formatted results.
-    """
-    logger.info(f"Performing Google Search for '{query}' (num_results={num_results})...")
+    logger.info(f"Preparing to call Google Search tool for '{query}' (num_results={num_results})...")
     results = []
+    if search_tool is None:
+        logger.error("Google Search tool object was not provided to search_google function.")
+        return [{"error": "Google Search tool not configured."}]
+
     try:
-        # Replace placeholder with actual tool call
-        # search_results_raw = google_search_tool.search(query=query, num_results=num_results)
-        search_results_raw = _call_google_search_api(query=query, num_results=num_results) # Using placeholder
+        # Call the search method on the provided tool object
+        # Assuming the tool object has a 'search' method matching the API definition
+        search_response = search_tool.search(query=query, num_results=num_results)
+        logger.info("Google Search tool called successfully.")
 
-        if not search_results_raw:
-            logger.info("No results found via Google Search.")
-            return []
+        # Process the response - structure depends on the actual tool's output
+        # Assuming response has a 'results' attribute which is a list of objects/dicts
+        # with 'title', 'url' (or 'link'), and 'snippet' attributes/keys.
+        if search_response and hasattr(search_response, 'results') and search_response.results:
+             raw_results = search_response.results
+             logger.info(f"Google Search tool returned {len(raw_results)} raw results.")
+             for res in raw_results:
+                 # Adapt attribute names if needed (e.g., res.url vs res.link)
+                 title = getattr(res, 'title', 'N/A')
+                 link = getattr(res, 'url', getattr(res, 'link', '#')) # Check for url or link
+                 snippet = getattr(res, 'snippet', 'N/A')
+                 results.append({
+                     "title": title,
+                     "link": link,
+                     "snippet": snippet,
+                     "source": "Google Search" # Add source identifier
+                 })
+        else:
+             logger.info("Google Search tool returned no results or results attribute missing.")
 
-        logger.info(f"Found {len(search_results_raw)} results via Google Search.")
-
-        # Format results (adjust keys based on actual tool output)
-        for raw_result in search_results_raw:
-            # Example formatting, adjust based on actual tool's return structure
-            results.append({
-                "title": raw_result.get("title", "N/A"),
-                "link": raw_result.get("link", "#"),
-                "snippet": raw_result.get("snippet", "N/A"),
-                "source": "Google Search" # Add source identifier
-            })
-
+    except AttributeError as ae:
+        logger.error(f"Error calling Google Search tool: Method 'search' not found or attribute error. {ae}", exc_info=True)
+        results = [{"error": f"Google Search tool method error: {ae}"}]
     except Exception as e:
-        logger.error(f"Error during Google Search: {e}", exc_info=True)
-        # Return empty list on error
-        results = []
+        logger.error(f"Error during Google Search execution: {e}", exc_info=True)
+        results = [{"error": f"Google Search failed: {e}"}]
 
+    logger.info(f"Formatted {len(results)} Google Search results.")
     return results
 
