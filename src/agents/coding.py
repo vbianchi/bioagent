@@ -11,20 +11,16 @@ logger = logging.getLogger(__name__)
 
 # --- Node Function ---
 
-def call_coding_agent(state: AgentState, coding_llm, code_generation_prompt_template: str) -> Dict[str, Any]:
+def call_coding_agent(state: AgentState, coding_llm, code_generation_prompt_template: str) -> AgentState: # Return full state
     """Coding Agent: Generates code, using history message list, detects language."""
     logger.info("--- Calling Coding Agent ---")
     query = state['query']; history = state['history']
     error_message = state.get("error"); generated_code_text = None; detected_language = "text"
     logger.info(f"Received code request: {query}")
 
-    # Format message list for LLM, including System Prompt
-    # Ensure prompt template is valid
     if "Error:" in code_generation_prompt_template:
-        logger.error("Code generation prompt template not loaded correctly from config.")
-        return {"generated_code": "# Config error: Code generation prompt missing.",
-                "generated_code_language": "text",
-                "error": (error_message or "") + "; Config error: Code generation prompt missing."}
+        logger.error("Code generation prompt template not loaded correctly.")
+        return {**state, "generated_code": "# Config error: Prompt missing.", "generated_code_language": "text", "error": (error_message or "") + "; Config error"}
 
     messages = [SystemMessage(content=code_generation_prompt_template)]
     for user_msg, ai_msg in history:
@@ -41,21 +37,16 @@ def call_coding_agent(state: AgentState, coding_llm, code_generation_prompt_temp
     try:
         response = coding_llm.invoke(messages); raw_code_response = response.content.strip()
         cleaned_code = raw_code_response
-        # Updated Regex to be more robust
         match_py = re.search(r"```(?:python)?\n?(.*?)```", raw_code_response, re.DOTALL | re.IGNORECASE)
         match_r = re.search(r"```r\n?(.*?)```", raw_code_response, re.DOTALL | re.IGNORECASE)
-
-        if match_r: # Check R first as it's more specific
-            detected_language = "r"; cleaned_code = match_r.group(1).strip(); logger.info("Detected language: R (from ```R)")
-        elif match_py: # Then check Python
-            detected_language = "python"; cleaned_code = match_py.group(1).strip(); logger.info("Detected language: Python (from ```python or ```)")
-        else: # No backticks found, use heuristics
+        if match_r: detected_language = "r"; cleaned_code = match_r.group(1).strip(); logger.info("Detected language: R (from ```R)")
+        elif match_py: detected_language = "python"; cleaned_code = match_py.group(1).strip(); logger.info("Detected language: Python (from ```python or ```)")
+        else:
              cleaned_code = raw_code_response
              if any(kw in cleaned_code for kw in ['library(', '<-', 'ggplot', 'dplyr']): detected_language = "r"; logger.info("Detected language: R (heuristic, no backticks)")
              elif any(kw in cleaned_code for kw in ['def ', 'import ', 'class ', 'print(']): detected_language = "python"; logger.info(f"Detected language: {detected_language} (heuristic, no backticks)")
              else: detected_language = "text"; logger.info(f"Detected language: {detected_language} (default, no backticks/keywords)")
         generated_code_text = cleaned_code
-
         logger.info("LLM code generation complete.")
         logger.debug("Generated code (start):\n%s", "\n".join(generated_code_text.splitlines()[:5]))
     except Exception as e:
@@ -63,6 +54,6 @@ def call_coding_agent(state: AgentState, coding_llm, code_generation_prompt_temp
         error_message = (error_message + "; " + code_error) if error_message else code_error
         generated_code_text = f"# Error during code generation: {e}"; detected_language = "text"
 
-    # Return only updated fields
-    return {"generated_code": generated_code_text, "generated_code_language": detected_language, "error": error_message}
+    # Return the entire state merged with updates
+    return {**state, "generated_code": generated_code_text, "generated_code_language": detected_language, "error": error_message}
 

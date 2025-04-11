@@ -11,12 +11,12 @@ logger = logging.getLogger(__name__)
 
 # --- Node Function ---
 
-def call_google_search_agent(state: AgentState, num_results: int = 5) -> Dict[str, Any]:
+def call_google_search_agent(state: AgentState, num_results: int = 5) -> AgentState: # Return full state
     """
     Agent node that performs a Google search using the refined query.
     """
     logger.info("--- Calling Google Search Agent ---")
-    refined_query = state.get("refined_query") or state.get("query") # Use refined if available
+    refined_query = state.get("refined_query") or state.get("query")
     error_message = state.get("error")
     google_search_results = []
 
@@ -28,6 +28,6 @@ def call_google_search_agent(state: AgentState, num_results: int = 5) -> Dict[st
         logger.error(search_error, exc_info=True)
         error_message = (error_message + "; " + search_error) if error_message else search_error
 
-    # Return only updated fields
-    return {"google_results": google_search_results, "error": error_message}
+    # Return the entire state merged with updates
+    return {**state, "google_results": google_search_results, "error": error_message}
 

@@ -7,7 +7,7 @@ from io import StringIO
 import re
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
-from functools import partial # Import partial
+from functools import partial
 
 # Import colorama
 from colorama import init as colorama_init, Fore, Style
@@ -26,8 +26,7 @@ try: from src.core.state import AgentState
 except ImportError: print("Error: src.core.state not found. Please create the file."); sys.exit(1)
 # Import tools and agents
 from src.tools.llm_utils import initialize_llm
-# Import agent node functions (ensure all are imported)
-from src.agents.router import route_query, decide_next_node, decide_after_refine, decide_after_summary # Import conditional logic
+from src.agents.router import route_query, decide_next_node, decide_after_refine, decide_after_summary
 from src.agents.refine import refine_query_node
 from src.agents.literature import call_literature_agent
 from src.agents.download import ask_download_preference, download_arxiv_pdfs, should_download
@@ -91,61 +90,21 @@ CODE_GENERATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.code_generat
 SYNTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.synthesis_prompt", "Error: Synthesis prompt not found.")
 
 # --- Graph Definition ---
-graph_builder = StateGraph(AgentState)
-
-# Add nodes
-graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
+# (Unchanged)
+graph_builder = StateGraph(AgentState); graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
 graph_builder.add_node("refine_query", partial(refine_query_node, llm=llm, refinement_prompt_template=REFINEMENT_PROMPT_TEMPLATE))
 graph_builder.add_node("literature_agent", partial(call_literature_agent, max_pubmed=MAX_RESULTS_PER_SOURCE, max_arxiv=MAX_RESULTS_PER_SOURCE))
-graph_builder.add_node("ask_download_preference", ask_download_preference)
-graph_builder.add_node("download_arxiv_pdfs", download_arxiv_pdfs)
+graph_builder.add_node("ask_download_preference", ask_download_preference); graph_builder.add_node("download_arxiv_pdfs", download_arxiv_pdfs)
 graph_builder.add_node("summarizer", partial(summarize_results, llm=llm, summarization_prompt_template=SUMMARIZATION_PROMPT_TEMPLATE, max_abstracts=MAX_ABSTRACTS_TO_SUMMARIZE))
 graph_builder.add_node("google_search", partial(call_google_search_agent, num_results=NUM_GOOGLE_RESULTS))
-# <<< Pass config to synthesizer node >>>
-graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE, config=config))
-graph_builder.add_node("chat_agent", partial(call_chat_agent, llm=llm))
-graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=coding_llm, code_generation_prompt_template=CODE_GENERATION_PROMPT_TEMPLATE))
-
-# Define edges
-graph_builder.add_edge(START, "router")
-# Router decides initial path
-graph_builder.add_conditional_edges("router", decide_next_node,
-                                    {"refine_query": "refine_query",
-                                     "chat_agent": "chat_agent",
-                                     "coding_agent": "coding_agent",
-                                     END: END})
-# After refinement, decide path based on original intent
-graph_builder.add_conditional_edges("refine_query", decide_after_refine,
-                                    { # Map intent to next node
-                                        "literature_agent": "literature_agent", # Both lit_search & deep_research start here
-                                        END: END # Fallback
-                                    })
-
-# Literature Search Path continues after literature_agent node
-graph_builder.add_edge("literature_agent", "ask_download_preference")
-graph_builder.add_conditional_edges("ask_download_preference", should_download,
-                                    {"download_arxiv_pdfs": "download_arxiv_pdfs",
-                                     # If skipping download, decide next based on intent
-                                     "google_search": "google_search", # For deep_research intent
-                                     "summarizer": "summarizer"}) # For literature_search intent
-graph_builder.add_edge("download_arxiv_pdfs", "summarizer") # After download, summarize first
-
-# After summarizer, decide if we need to do deep research steps
-graph_builder.add_conditional_edges("summarizer", decide_after_summary,
-                                    {"google_search": "google_search", END: END})
-
-# Deep Research Path continues
-graph_builder.add_edge("google_search", "synthesizer")
-graph_builder.add_edge("synthesizer", END)
-
-# Simple paths end
-graph_builder.add_edge("chat_agent", END)
-graph_builder.add_edge("coding_agent", END)
-
-# Compile the graph
-app = graph_builder.compile()
-logger.info("Agent graph compiled.")
-
+graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE, app_config=config))
+graph_builder.add_node("chat_agent", partial(call_chat_agent, llm=llm)); graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=coding_llm, code_generation_prompt_template=CODE_GENERATION_PROMPT_TEMPLATE))
+graph_builder.add_edge(START, "router"); graph_builder.add_conditional_edges("router", decide_next_node, {"refine_query": "refine_query", "chat_agent": "chat_agent", "coding_agent": "coding_agent", END: END})
+graph_builder.add_conditional_edges("refine_query", decide_after_refine, {"literature_agent": "literature_agent", END: END})
+graph_builder.add_edge("literature_agent", "ask_download_preference"); graph_builder.add_conditional_edges("ask_download_preference", should_download, {"download_arxiv_pdfs": "download_arxiv_pdfs", "google_search": "google_search", "summarizer": "summarizer"})
+graph_builder.add_edge("download_arxiv_pdfs", "summarizer"); graph_builder.add_conditional_edges("summarizer", decide_after_summary, {"google_search": "google_search", END: END})
+graph_builder.add_edge("google_search", "synthesizer"); graph_builder.add_edge("synthesizer", END); graph_builder.add_edge("chat_agent", END); graph_builder.add_edge("coding_agent", END)
+app = graph_builder.compile(); logger.info("Agent graph compiled.")
 
 # --- Function to save results ---
 def save_output(run_dir: str, relative_path: str, data: Any):
@@ -178,7 +137,6 @@ if __name__ == "__main__":
         os.makedirs(logs_dir, exist_ok=True); os.makedirs(results_dir, exist_ok=True); os.makedirs(temp_data_dir, exist_ok=True)
         log_filepath = os.path.join(logs_dir, "run.log"); file_handler = logging.FileHandler(log_filepath, encoding='utf-8'); file_handler.setLevel(logging.INFO)
         file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'); file_handler.setFormatter(file_formatter)
-        # Add file handler ONLY to the specific logger used in modules
         module_loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name.startswith('src.')]
         if not module_loggers: module_loggers.append(logger)
         for mod_logger in module_loggers:
@@ -203,7 +161,6 @@ if __name__ == "__main__":
         if not initial_query.strip(): print(f"{COLOR_WARN}Please enter a query or message.{COLOR_RESET}"); interaction_count -= 1; continue
         logger.info(f"--- Starting Interaction #{interaction_count} ---")
 
-        # Initialize state for the graph
         input_for_graph = AgentState(
             query=initial_query.strip(), history=conversation_state["history"], run_dir=run_dir,
             refined_query=None, search_results=None, summary=None, chat_response=None,
@@ -217,8 +174,6 @@ if __name__ == "__main__":
         try:
             # Use stream to get intermediate states
             for event in app.stream(input_for_graph):
-                event_name = list(event.keys())[0]
-                # logger.debug(f"Graph Event: {event_name}") # Optional: log node execution
                 final_state = list(event.values())[0]
 
             if final_state: logger.info("Graph execution complete.")
@@ -229,78 +184,107 @@ if __name__ == "__main__":
             try: logger.debug("Final State: %s", json.dumps(final_state, indent=2, default=str))
             except Exception as dump_e: logger.warning(f"Could not serialize final state for logging: {dump_e}")
 
-            # --- Output Handling Logic ---
+            # --- REVISED Output Handling Logic ---
             output_message = None
+            saved_filename = None
 
-            # Prioritize Synthesis Report
-            if final_state.get("synthesized_report"):
-                report = final_state["synthesized_report"]
-                output_message = f"{COLOR_SYNTHESIS}--- Synthesized Report ---{COLOR_RESET}\n{COLOR_SYNTHESIS}{report}{COLOR_RESET}"
-                logger.info("Synthesized report generated and displayed.")
-                save_output(run_dir, os.path.join("results", f"synthesized_report_{interaction_count}.txt"), report)
-                agent_response = report
-                conversation_state["last_search_results"] = final_state.get("search_results")
-                conversation_state["last_summary"] = final_state.get("summary") # Keep summary too
+            # Store results/summary from final_state into conversation_state *before* handling output
+            # This ensures they are available even if only summary is in final_state
+            if final_state.get("search_results") is not None:
+                 conversation_state["last_search_results"] = final_state.get("search_results")
+            if final_state.get("summary") is not None:
+                 conversation_state["last_summary"] = final_state.get("summary")
 
-            # Handle errors (check after synthesis attempt)
-            elif final_state.get("error"):
+            # Check for errors first
+            if final_state.get("error"):
                 error_msg = f"An error occurred: {final_state['error']}"
                 output_message = f"{COLOR_ERROR}{error_msg}{COLOR_RESET}"
                 logger.error(error_msg)
                 agent_response = "Sorry, an error occurred."
                 save_output(run_dir, os.path.join("results", f"error_{interaction_count}.txt"), error_msg)
 
-            # Handle other outputs if no synthesis/error
+            # Check for primary outputs in order of preference
+            elif final_state.get("synthesized_report"):
+                report = final_state["synthesized_report"]
+                output_message = f"{COLOR_SYNTHESIS}--- Synthesized Report ---{COLOR_RESET}\n{COLOR_SYNTHESIS}{report}{COLOR_RESET}"
+                logger.info("Synthesized report generated and displayed.")
+                saved_filename = f"synthesized_report_{interaction_count}.txt"
+                save_output(run_dir, os.path.join("results", saved_filename), report)
+                agent_response = report
+                # Note: last_search_results/last_summary already updated above if they were in final_state
+
             elif final_state.get("generated_code"):
                 code = final_state["generated_code"]; language = final_state.get("generated_code_language", "text"); extension = {"python": "py", "r": "R"}.get(language, "txt"); filename = f"generated_code_{interaction_count}.{extension}"
                 output_message = f"{COLOR_OUTPUT}Generated Code ({language}):{COLOR_RESET}\n{COLOR_CODE}```{language}\n{code}\n```"
                 logger.info(f"Code ({language}) generated and displayed.")
-                save_output(run_dir, os.path.join("results", filename), code); agent_response = f"Generated {language} code snippet (saved to results/{filename})."
-                conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
+                saved_filename = filename
+                save_output(run_dir, os.path.join("results", saved_filename), code);
+                agent_response = f"Generated {language} code snippet (saved to results/{saved_filename})."
+                conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None # Clear search context
 
-            elif final_state.get("search_results") is not None: # Literature search path finished (no synthesis)
-                results = final_state["search_results"]; refined_query = final_state.get('refined_query', 'N/A'); output_lines = []
-                if results:
+            elif final_state.get("summary"): # Check summary only if no synthesis/code
+                summary = final_state["summary"]
+                # <<< FIX: Get results from conversation_state, which was updated above >>>
+                results = conversation_state.get("last_search_results", [])
+                refined_query = final_state.get('refined_query', 'N/A') # Refined query is likely in final_state
+                output_lines = []
+
+                if results: # Only show summary if there were associated results
                     output_lines.append(f"{COLOR_OUTPUT}Found {len(results)} literature results (using refined query: '{refined_query}'):{COLOR_RESET}")
-                    logger.info(f"Found {len(results)} results for refined query: '{refined_query}'")
-                    save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.json"), results); conversation_state["last_search_results"] = results; conversation_state["last_summary"] = final_state.get("summary")
+                    # Save search results (if not already saved by literature agent - maybe remove save there?)
+                    save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.json"), results);
                     for i, result in enumerate(results):
                         output_lines.append(f"\n{Style.BRIGHT}--- Result {i+1} ({result.get('source', 'N/A')}) ---{Style.NORMAL}")
                         output_lines.append(f"{COLOR_OUTPUT}  Title: {result.get('title', 'N/A')}{COLOR_RESET}")
                         output_lines.append(f"  ID: {result.get('id', 'N/A')}"); output_lines.append(f"  URL: {result.get('url', '#')}")
                         if result.get("local_pdf_path"): output_lines.append(f"  {COLOR_FILE}Downloaded PDF: {result['local_pdf_path']}{COLOR_RESET}")
-                    if final_state.get("summary"):
-                        summary = final_state["summary"]; output_lines.append(f"\n{COLOR_SUMMARY}--- Summary of Results ---{COLOR_RESET}"); output_lines.append(f"{COLOR_SUMMARY}{summary}{COLOR_RESET}")
-                        logger.info("Summary generated and displayed."); save_output(run_dir, os.path.join("results", f"summary_{interaction_count}.txt"), summary); agent_response = summary
-                    else: # No summary generated/failed after search
-                        no_summary_msg_local = f"I found {len(results)} results.";
-                        if final_state.get("download_preference") == "yes": no_summary_msg_local += " PDF downloads attempted."
-                        elif final_state.get("arxiv_results_found"): no_summary_msg_local += " PDFs were not downloaded."
-                        if "Summarization failed" in final_state.get("error", ""): no_summary_msg_local += " Failed to generate summary."
-                        output_lines.append(f"\n{COLOR_WARN}BioAgent: {no_summary_msg_local}{COLOR_RESET}"); logger.warning("Summary was not generated or failed."); agent_response = no_summary_msg_local; save_output(run_dir, os.path.join("results", f"summary_{interaction_count}.txt"), no_summary_msg_local)
-                else: # No results found
-                    refined_query = final_state.get('refined_query', 'N/A'); no_results_msg_local = f"No literature results found from PubMed or ArXiv for refined query: '{refined_query}'"
-                    output_lines.append(f"{COLOR_WARN}{no_results_msg_local}{COLOR_RESET}"); logger.info(f"No literature results found for refined query: '{refined_query}'")
-                    agent_response = no_results_msg_local; save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.txt"), no_results_msg_local)
-                    conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
-                output_message = "\n".join(output_lines)
+                    # Append summary
+                    output_lines.append(f"\n{COLOR_SUMMARY}--- Summary of Results ---{COLOR_RESET}"); output_lines.append(f"{COLOR_SUMMARY}{summary}{COLOR_RESET}")
+                    logger.info("Summary generated and displayed.")
+                    saved_filename = f"summary_{interaction_count}.txt"
+                    save_output(run_dir, os.path.join("results", saved_filename), summary);
+                    agent_response = summary # Use summary for history
+                else: # Case where summary node ran but no results were found/stored (less likely now)
+                    output_message = f"{COLOR_WARN}Summary generated but no associated search results found.{COLOR_RESET}"
+                    logger.warning("Summary node ran without associated search results.")
+                    agent_response = summary
+                    saved_filename = f"summary_{interaction_count}.txt"
+                    save_output(run_dir, os.path.join("results", saved_filename), summary);
+                    conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None # Clear search context
+
+                if output_lines: output_message = "\n".join(output_lines)
 
             elif final_state.get("chat_response"):
                 agent_response = final_state["chat_response"]; output_message = f"\n{COLOR_OUTPUT}BioAgent: {agent_response}{COLOR_RESET}"
                 logger.info("Chat response generated and displayed.")
-                save_output(run_dir, os.path.join("results", f"chat_response_{interaction_count}.txt"), agent_response); conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
+                saved_filename = f"chat_response_{interaction_count}.txt"
+                save_output(run_dir, os.path.join("results", saved_filename), agent_response);
+                conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
 
-            elif not final_state.get("error"): # Fallback if no other output generated
+            # Handle case where literature search ran but found nothing
+            # Check search_results is empty list, not just None
+            elif isinstance(final_state.get("search_results"), list) and not final_state.get("search_results"):
+                 refined_query = final_state.get('refined_query', 'N/A');
+                 no_results_msg_local = f"No literature results found from PubMed or ArXiv for refined query: '{refined_query}'"
+                 output_message = f"{COLOR_WARN}{no_results_msg_local}{COLOR_RESET}";
+                 logger.info(f"No literature results found for refined query: '{refined_query}'")
+                 agent_response = no_results_msg_local; saved_filename=f"search_results_{interaction_count}.txt"; save_output(run_dir, os.path.join("results", saved_filename), no_results_msg_local)
+                 conversation_state["last_search_results"] = []; conversation_state["last_summary"] = None
+
+            # Fallback if absolutely no other output generated and no error
+            elif not final_state.get("error"):
                  no_output_msg_local = "No specific output generated."; output_message = f"{COLOR_WARN}{no_output_msg_local}{COLOR_RESET}"
                  logger.warning("Graph finished without error but no standard output produced.")
-                 agent_response = no_output_msg_local; save_output(run_dir, os.path.join("results", f"output_{interaction_count}.txt"), no_output_msg_local)
+                 agent_response = no_output_msg_local; saved_filename=f"output_{interaction_count}.txt"; save_output(run_dir, os.path.join("results", saved_filename), no_output_msg_local)
                  conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
 
+            # Print the final assembled output message
             if output_message: print(output_message)
 
             # --- Update History ---
             if agent_response is not None:
-                 conversation_state["history"].append((initial_query, agent_response));
+                 # Use the stripped initial query for history consistency
+                 conversation_state["history"].append((initial_query.strip(), agent_response));
                  if len(conversation_state["history"]) > MAX_HISTORY_TURNS: conversation_state["history"] = conversation_state["history"][-MAX_HISTORY_TURNS:]
                  save_output(run_dir, os.path.join("logs", "conversation_history.json"), conversation_state["history"])
 
