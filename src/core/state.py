@@ -1,6 +1,8 @@
+# src/core/state.py
+# Central definition for the Agent State TypedDict
+
 from typing import TypedDict, List, Dict, Any, Optional, Tuple
 
-# Define AgentState centrally
 class AgentState(TypedDict):
     """
     Represents the state of our agent graph.
@@ -12,6 +14,9 @@ class AgentState(TypedDict):
     error: Optional[str]
     next_node: Optional[str] # For routing decisions
     run_dir: Optional[str] # Directory for saving files (used in CLI)
+
+    # Routing Info
+    route_intent: Optional[str] # Stores intent classified by router ('literature_search', 'deep_research', etc.)
 
     # Literature Search Path
     refined_query: Optional[str]
@@ -31,4 +36,3 @@ class AgentState(TypedDict):
     # Deep Research Path
     google_results: Optional[List[Dict[str, Any]]] # Store google search snippets/links
     synthesized_report: Optional[str] # Final report from deep research
-

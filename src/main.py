@@ -7,7 +7,7 @@ from io import StringIO
 import re
 import traceback
 from typing import List, Dict, Any, Optional, Tuple
-from functools import partial
+from functools import partial # Import partial
 
 # Import colorama
 from colorama import init as colorama_init, Fore, Style
@@ -26,13 +26,14 @@ try: from src.core.state import AgentState
 except ImportError: print("Error: src.core.state not found. Please create the file."); sys.exit(1)
 # Import tools and agents
 from src.tools.llm_utils import initialize_llm
-from src.agents.router import route_query, decide_next_node, decide_after_refine # Import new conditional edge logic
-from src.agents.refine import refine_query_node # Import new node
+# Import agent node functions (ensure all are imported)
+from src.agents.router import route_query, decide_next_node, decide_after_refine, decide_after_summary # Import conditional logic
+from src.agents.refine import refine_query_node
 from src.agents.literature import call_literature_agent
 from src.agents.download import ask_download_preference, download_arxiv_pdfs, should_download
-from src.agents.google_search import call_google_search_agent # Import new node
+from src.agents.google_search import call_google_search_agent
 from src.agents.summarize import summarize_results
-from src.agents.synthesize import synthesize_results_agent # Import new node
+from src.agents.synthesize import synthesize_results_agent
 from src.agents.chat import call_chat_agent
 from src.agents.coding import call_coding_agent
 
@@ -79,7 +80,7 @@ if coding_llm is None: logger.warning("Failed to initialize specific coding LLM,
 # --- Search Settings ---
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
-NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5) # New setting
+NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5)
 logger.info(f"Search settings: max_lit_results={MAX_RESULTS_PER_SOURCE}, max_google={NUM_GOOGLE_RESULTS}, max_abstracts={MAX_ABSTRACTS_TO_SUMMARIZE}")
 
 # --- Prompt Templates ---
@@ -87,110 +88,21 @@ ROUTING_PROMPT_TEMPLATE = get_config_value(config, "prompts.routing_prompt", "Er
 REFINEMENT_PROMPT_TEMPLATE = get_config_value(config, "prompts.refinement_prompt", "Error: Refinement prompt not found.")
 SUMMARIZATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.summarization_prompt", "Error: Summarization prompt not found.")
 CODE_GENERATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.code_generation_prompt", "Error: Code generation prompt not found.")
-SYNTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.synthesis_prompt", "Error: Synthesis prompt not found.") # New prompt
+SYNTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.synthesis_prompt", "Error: Synthesis prompt not found.")
 
 # --- Graph Definition ---
 graph_builder = StateGraph(AgentState)
 
 # Add nodes
 graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
-graph_builder.add_node("refine_query", partial(refine_query_node, llm=llm, refinement_prompt_template=REFINEMENT_PROMPT_TEMPLATE)) # New node
-graph_builder.add_node("literature_agent", partial(call_literature_agent, max_pubmed=MAX_RESULTS_PER_SOURCE, max_arxiv=MAX_RESULTS_PER_SOURCE))
-graph_builder.add_node("ask_download_preference", ask_download_preference)
-graph_builder.add_node("download_arxiv_pdfs", download_arxiv_pdfs)
-graph_builder.add_node("summarizer", partial(summarize_results, llm=llm, summarization_prompt_template=SUMMARIZATION_PROMPT_TEMPLATE, max_abstracts=MAX_ABSTRACTS_TO_SUMMARIZE))
-graph_builder.add_node("google_search", partial(call_google_search_agent, num_results=NUM_GOOGLE_RESULTS)) # New node
-graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE)) # New node
-graph_builder.add_node("chat_agent", partial(call_chat_agent, llm=llm))
-graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=coding_llm, code_generation_prompt_template=CODE_GENERATION_PROMPT_TEMPLATE))
-
-# Define edges
-graph_builder.add_edge(START, "router")
-# Router directs to refinement, chat, coding, or end
-graph_builder.add_conditional_edges("router", decide_next_node,
-                                    {"refine_query": "refine_query", # Lit search & Deep research go here
-                                     "chat_agent": "chat_agent",
-                                     "coding_agent": "coding_agent",
-                                     END: END})
-# After refinement, decide actual path based on original intent
-graph_builder.add_conditional_edges("refine_query", decide_after_refine,
-                                    {"literature_agent": "literature_agent", # For both lit_search & deep_research intent
-                                     END: END}) # Fallback
-
-# Literature Search Path
-graph_builder.add_edge("literature_agent", "ask_download_preference")
-graph_builder.add_conditional_edges("ask_download_preference", should_download,
-                                    {"download_arxiv_pdfs": "download_arxiv_pdfs", "summarizer": "summarizer"})
-graph_builder.add_edge("download_arxiv_pdfs", "summarizer")
-graph_builder.add_edge("summarizer", END) # Simple literature search ends after summary
-
-# Deep Research Path (extends literature path)
-# NOTE: This assumes deep_research intent also goes through literature_agent first
-# If download happened, it goes download_arxiv_pdfs -> summarizer -> google_search
-# If download skipped, it goes ask_download_preference -> summarizer -> google_search
-# Let's simplify: Lit search path ends at summary. Deep research path starts after lit search.
-# New Deep Research Flow: router -> refine -> literature_agent -> google_search -> synthesizer -> END
-# This requires modifying decide_after_refine and adding edges
-
-# --- REVISED Graph Flow ---
-graph_builder = StateGraph(AgentState) # Reset builder for clarity
-
-# Add nodes (same as above)
-graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
 graph_builder.add_node("refine_query", partial(refine_query_node, llm=llm, refinement_prompt_template=REFINEMENT_PROMPT_TEMPLATE))
 graph_builder.add_node("literature_agent", partial(call_literature_agent, max_pubmed=MAX_RESULTS_PER_SOURCE, max_arxiv=MAX_RESULTS_PER_SOURCE))
 graph_builder.add_node("ask_download_preference", ask_download_preference)
 graph_builder.add_node("download_arxiv_pdfs", download_arxiv_pdfs)
 graph_builder.add_node("summarizer", partial(summarize_results, llm=llm, summarization_prompt_template=SUMMARIZATION_PROMPT_TEMPLATE, max_abstracts=MAX_ABSTRACTS_TO_SUMMARIZE))
 graph_builder.add_node("google_search", partial(call_google_search_agent, num_results=NUM_GOOGLE_RESULTS))
-graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE))
-graph_builder.add_node("chat_agent", partial(call_chat_agent, llm=llm))
-graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=coding_llm, code_generation_prompt_template=CODE_GENERATION_PROMPT_TEMPLATE))
-
-# Define edges
-graph_builder.add_edge(START, "router")
-graph_builder.add_conditional_edges("router", decide_next_node,
-                                    {"refine_query": "refine_query", # Lit search & Deep research go here
-                                     "chat_agent": "chat_agent",
-                                     "coding_agent": "coding_agent",
-                                     END: END})
-# After refinement, decide path based on original intent (requires route_intent in state)
-graph_builder.add_conditional_edges("refine_query", decide_after_refine,
-                                    { # Map intent to next node
-                                        "literature_search": "literature_agent",
-                                        "deep_research": "literature_agent", # Start deep research with literature
-                                        END: END # Fallback
-                                    })
-
-# Literature Search Path (ends after summary)
-graph_builder.add_edge("literature_agent", "ask_download_preference")
-graph_builder.add_conditional_edges("ask_download_preference", should_download,
-                                    {"download_arxiv_pdfs": "download_arxiv_pdfs", "summarizer": "summarizer"})
-graph_builder.add_edge("download_arxiv_pdfs", "summarizer")
-graph_builder.add_edge("summarizer", END) # Literature search path ends here
-
-# Deep Research Path (continues after literature search)
-# Need a way to distinguish if we came from deep_research path
-# Modify decide_after_refine? No, modify where summarizer goes.
-# Add conditional edge from summarizer based on route_intent
-# This requires route_intent to be passed through all nodes or re-checked.
-
-# --- Simpler Approach: Modify graph based on initial routing ---
-# Let's keep the graph simple for now. Deep research will just add google search and synthesis *after* the normal literature path.
-# This means 'literature_search' intent stops at summary, 'deep_research' continues.
-
-# --- REVISED AGAIN Graph Flow ---
-graph_builder = StateGraph(AgentState) # Reset builder
-
-# Add nodes (same as above)
-graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
-graph_builder.add_node("refine_query", partial(refine_query_node, llm=llm, refinement_prompt_template=REFINEMENT_PROMPT_TEMPLATE))
-graph_builder.add_node("literature_agent", partial(call_literature_agent, max_pubmed=MAX_RESULTS_PER_SOURCE, max_arxiv=MAX_RESULTS_PER_SOURCE))
-graph_builder.add_node("ask_download_preference", ask_download_preference)
-graph_builder.add_node("download_arxiv_pdfs", download_arxiv_pdfs)
-graph_builder.add_node("summarizer", partial(summarize_results, llm=llm, summarization_prompt_template=SUMMARIZATION_PROMPT_TEMPLATE, max_abstracts=MAX_ABSTRACTS_TO_SUMMARIZE))
-graph_builder.add_node("google_search", partial(call_google_search_agent, num_results=NUM_GOOGLE_RESULTS))
-graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE))
+# <<< Pass config to synthesizer node >>>
+graph_builder.add_node("synthesizer", partial(synthesize_results_agent, llm=llm, synthesis_prompt_template=SYNTHESIS_PROMPT_TEMPLATE, config=config))
 graph_builder.add_node("chat_agent", partial(call_chat_agent, llm=llm))
 graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=coding_llm, code_generation_prompt_template=CODE_GENERATION_PROMPT_TEMPLATE))
 
@@ -202,26 +114,23 @@ graph_builder.add_conditional_edges("router", decide_next_node,
                                      "chat_agent": "chat_agent",
                                      "coding_agent": "coding_agent",
                                      END: END})
-# Refinement always happens if routed here
-graph_builder.add_edge("refine_query", "literature_agent") # Always do literature search after refining
+# After refinement, decide path based on original intent
+graph_builder.add_conditional_edges("refine_query", decide_after_refine,
+                                    { # Map intent to next node
+                                        "literature_agent": "literature_agent", # Both lit_search & deep_research start here
+                                        END: END # Fallback
+                                    })
 
-# Literature search path asks download preference
+# Literature Search Path continues after literature_agent node
 graph_builder.add_edge("literature_agent", "ask_download_preference")
 graph_builder.add_conditional_edges("ask_download_preference", should_download,
-                                    {"download_arxiv_pdfs": "download_arxiv_pdfs", "summarizer": "summarizer"})
-graph_builder.add_edge("download_arxiv_pdfs", "summarizer")
+                                    {"download_arxiv_pdfs": "download_arxiv_pdfs",
+                                     # If skipping download, decide next based on intent
+                                     "google_search": "google_search", # For deep_research intent
+                                     "summarizer": "summarizer"}) # For literature_search intent
+graph_builder.add_edge("download_arxiv_pdfs", "summarizer") # After download, summarize first
 
 # After summarizer, decide if we need to do deep research steps
-def decide_after_summary(state: AgentState) -> str:
-    """Decide whether to continue to Google Search or end."""
-    # Check the original intent stored by the router
-    if state.get("route_intent") == "deep_research":
-        logger.info("Continuing to Google Search for Deep Research.")
-        return "google_search"
-    else:
-        logger.info("Ending after Literature Summary.")
-        return END
-
 graph_builder.add_conditional_edges("summarizer", decide_after_summary,
                                     {"google_search": "google_search", END: END})
 
@@ -241,6 +150,7 @@ logger.info("Agent graph compiled.")
 # --- Function to save results ---
 def save_output(run_dir: str, relative_path: str, data: Any):
     # (Unchanged)
+    if not run_dir: return
     filepath = os.path.join(run_dir, relative_path)
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -270,7 +180,7 @@ if __name__ == "__main__":
         file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'); file_handler.setFormatter(file_formatter)
         # Add file handler ONLY to the specific logger used in modules
         module_loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict if name.startswith('src.')]
-        if not module_loggers: module_loggers.append(logger) # Add main logger if no module loggers yet
+        if not module_loggers: module_loggers.append(logger)
         for mod_logger in module_loggers:
              if not any(isinstance(h, logging.FileHandler) and h.baseFilename == log_filepath for h in mod_logger.handlers):
                   mod_logger.addHandler(file_handler)
@@ -299,14 +209,13 @@ if __name__ == "__main__":
             refined_query=None, search_results=None, summary=None, chat_response=None,
             error=None, next_node=None, arxiv_results_found=False, download_preference=None,
             code_request=None, generated_code=None, generated_code_language=None,
-            google_results=None, synthesized_report=None, route_intent=None # Initialize new fields
+            google_results=None, synthesized_report=None, route_intent=None
         )
 
         logger.info(f"Invoking agent graph for query:\n{initial_query[:200]}...")
         final_state = None
         try:
-            # Use stream to get intermediate states if needed for complex debugging
-            # final_state = app.invoke(input_for_graph)
+            # Use stream to get intermediate states
             for event in app.stream(input_for_graph):
                 event_name = list(event.keys())[0]
                 # logger.debug(f"Graph Event: {event_name}") # Optional: log node execution
@@ -316,23 +225,22 @@ if __name__ == "__main__":
             else: logger.error("Graph execution did not produce a final state."); continue
 
             print(f"\n{COLOR_INFO}--- Agent Output (Interaction #{interaction_count}) ---{COLOR_RESET}")
-            agent_response = None # This will hold the primary text response for history
+            agent_response = None
             try: logger.debug("Final State: %s", json.dumps(final_state, indent=2, default=str))
             except Exception as dump_e: logger.warning(f"Could not serialize final state for logging: {dump_e}")
 
             # --- Output Handling Logic ---
             output_message = None
 
-            # Prioritize showing Synthesis Report if it exists
+            # Prioritize Synthesis Report
             if final_state.get("synthesized_report"):
                 report = final_state["synthesized_report"]
                 output_message = f"{COLOR_SYNTHESIS}--- Synthesized Report ---{COLOR_RESET}\n{COLOR_SYNTHESIS}{report}{COLOR_RESET}"
                 logger.info("Synthesized report generated and displayed.")
                 save_output(run_dir, os.path.join("results", f"synthesized_report_{interaction_count}.txt"), report)
-                agent_response = report # Use report for history
-                # Clear other results from conversation state? Maybe not needed.
-                conversation_state["last_search_results"] = final_state.get("search_results") # Keep results used for synthesis
-                conversation_state["last_summary"] = final_state.get("summary")
+                agent_response = report
+                conversation_state["last_search_results"] = final_state.get("search_results")
+                conversation_state["last_summary"] = final_state.get("summary") # Keep summary too
 
             # Handle errors (check after synthesis attempt)
             elif final_state.get("error"):

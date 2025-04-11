@@ -6,22 +6,8 @@ from typing import Dict, Any
 from src.tools.pdf_downloader import download_arxiv_pdf_tool
 # Import END from langgraph
 from langgraph.graph import END
-
-# Try importing the central AgentState definition
-try:
-    from src.core.state import AgentState
-except ImportError:
-    # Fallback definition if import fails
-    from typing import TypedDict, List, Dict, Any, Optional, Tuple # Keep import here
-    logger.warning("Could not import AgentState from src.core.state, using fallback definition in download.py.")
-    class AgentState(TypedDict): # <<< Moved class definition to new line
-        query: str; history: List[Tuple[str, str]]; refined_query: Optional[str]
-        search_results: Optional[List[Dict[str, Any]]]; summary: Optional[str]
-        chat_response: Optional[str]; error: Optional[str]; next_node: Optional[str]
-        run_dir: Optional[str]; arxiv_results_found: bool; download_preference: Optional[str]
-        code_request: Optional[str]; generated_code: Optional[str]
-        generated_code_language: Optional[str]; google_results: Optional[List[Dict[str, Any]]]
-        synthesized_report: Optional[str]; route_intent: Optional[str] # Ensure all fields
+# Import central AgentState definition
+from src.core.state import AgentState
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +24,7 @@ def ask_download_preference(state: AgentState) -> Dict[str, Any]:
     preference = "no" # Default to no
     error_message = state.get("error") # Preserve existing errors
 
+    # Only prompt if ArXiv papers were found AND we are in CLI mode (run_dir is set)
     if arxiv_found and run_dir is not None:
         try:
             user_input = input("ArXiv papers found. Download PDFs? (yes/no): ").strip().lower()
@@ -88,14 +75,17 @@ def download_arxiv_pdfs(state: AgentState) -> Dict[str, Any]:
 def should_download(state: AgentState) -> str:
     """Determines the next node after asking download preference."""
     preference = state.get("download_preference", "no")
+    intent = state.get("route_intent", "literature_search") # Check original intent
+
+    # Only download if preference is yes AND we are in CLI mode (run_dir is set)
     if preference == "yes" and state.get("run_dir"):
         logger.info("Proceeding to download ArXiv PDFs.")
         return "download_arxiv_pdfs"
     else:
         if preference == "yes": logger.warning("Download preference is 'yes' but run_dir not set (UI mode?). Skipping download.")
         else: logger.info("Skipping ArXiv PDF download.")
+
         # Decide next step based on original intent
-        intent = state.get("route_intent", "literature_search")
         if intent == "deep_research":
             return "google_search" # Go to google search after skipping download
         else:

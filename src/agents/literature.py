@@ -3,22 +3,8 @@ from typing import Dict, Any
 
 # Import tools
 from src.tools.literature_search import search_pubmed, search_arxiv
-
-# Try importing the central AgentState definition
-try:
-    from src.core.state import AgentState
-except ImportError:
-    # Fallback definition if import fails
-    from typing import TypedDict, List, Dict, Any, Optional, Tuple # Keep import here
-    logger.warning("Could not import AgentState from src.core.state, using fallback definition in literature.py.")
-    class AgentState(TypedDict): # <<< Moved class definition to new line
-        query: str; history: List[Tuple[str, str]]; refined_query: Optional[str]
-        search_results: Optional[List[Dict[str, Any]]]; summary: Optional[str]
-        chat_response: Optional[str]; error: Optional[str]; next_node: Optional[str]
-        run_dir: Optional[str]; arxiv_results_found: bool; download_preference: Optional[str]
-        code_request: Optional[str]; generated_code: Optional[str]
-        generated_code_language: Optional[str]; google_results: Optional[List[Dict[str, Any]]]
-        synthesized_report: Optional[str]; route_intent: Optional[str] # Ensure all fields
+# Import central AgentState definition
+from src.core.state import AgentState
 
 logger = logging.getLogger(__name__)
 
