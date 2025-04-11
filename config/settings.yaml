@@ -1,9 +1,9 @@
 # Configuration settings for the BioAgent
 
 # LLM Provider ('openai', 'gemini', 'ollama')
-llm_provider: "gemini" # CHANGE THIS to 'gemini' or 'ollama' as needed
+llm_provider: "gemini" # CHANGE THIS to 'gemini', 'openai' or 'ollama' as needed
 
-# General LLM Settings (Used for routing, chat, refinement, summarization unless overridden)
+# General LLM Settings (Used for routing, chat, refinement, summary, synthesis unless overridden)
 llm_settings:
   openai_model_name: "gpt-3.5-turbo"
   gemini_model_name: "gemini-2.0-flash"
@@ -12,38 +12,38 @@ llm_settings:
 
 # Coding Agent LLM Settings
 coding_agent_settings:
-  # Provider for coding tasks. Use 'default' to use the main llm_provider above.
-  llm_provider: "gemini"
-  # --- Provider-specific models optimized for coding ---
-  openai_model_name: "gpt-4-turbo-preview" # Suggest stronger model for coding
-  gemini_model_name: "gemini-2.0-flash" # Suggest stronger model for coding
-  ollama_model_name: "codellama:13b" # Example, ensure pulled
-  # --- Common Settings ---
-  temperature: 0.1 # Slightly higher temp might be okay for code gen
+  llm_provider: "default"
+  openai_model_name: "gpt-4-turbo-preview"
+  gemini_model_name: "gemini-1.5-pro-latest"
+  ollama_model_name: "codellama:13b"
+  temperature: 0.1
 
 # Search Settings
 search_settings:
   max_results_per_source: 5
   max_abstracts_to_summarize: 5
+  num_google_results: 5 # Number of Google results to fetch
 
 # Prompt Templates
 prompts:
+  # Updated routing prompt to include 'deep_research'
   routing_prompt: |
-    Classify the user's query into one of the following categories: 'literature_search', 'code_generation', or 'chat'. Respond ONLY with the category name.
+    Classify the user's query into one of the following categories: 'literature_search', 'code_generation', 'deep_research', or 'chat'. Respond ONLY with the category name.
 
-    - 'literature_search': User is asking to find papers, articles, publications, search results, or specific information likely found by searching scientific literature databases (like PubMed or ArXiv). Keywords: "find papers", "search for articles", "publications on", "literature about".
-    - 'code_generation': User is asking for code to be written, explained, or debugged, often mentioning programming languages (Python, R) or libraries (pandas, matplotlib). Keywords: "write code", "generate python", "plot this", "debug script", "how do I code", "rewrite this code".
-    - 'chat': User is asking a general question, definition, explanation, making a statement, greeting, or having a conversation not covered by the other categories. Keywords: "what is", "explain", "tell me about", "hello", "hi", "can you". Also includes follow-up questions like "what did you find?".
+    - 'literature_search': User asks specifically for papers, articles, publications from PubMed or ArXiv. Keywords: "find papers", "search pubmed", "arxiv articles".
+    - 'code_generation': User asks for code to be written, explained, or debugged. Keywords: "write code", "generate python", "plot this", "debug script", "R code for".
+    - 'deep_research': User asks for a broader overview, summary, or information synthesis on a topic, implying searching multiple sources including the web. Keywords: "research topic", "give me an overview", "deep dive on", "summarize information about", "what is known about".
+    - 'chat': General questions, definitions, conversation, follow-ups not covered above. Keywords: "what is", "explain", "hello", "what did you find?".
 
     User Query: "{query}"
     Classification:
   refinement_prompt: |
-    Given the user's query, extract the core topic or keywords suitable for searching scientific databases like PubMed and ArXiv. Focus on nouns, technical terms, essential concepts. Remove conversational phrases like "find papers on", "search for", "tell me about". Respond ONLY with the refined search query string.
+    Given the user's query, extract the core topic or keywords suitable for searching scientific databases (PubMed, ArXiv) AND web search engines (Google). Focus on nouns, technical terms, essential concepts. Remove conversational phrases. Respond ONLY with the refined search query string.
 
     User Query: "{query}"
     Refined Search Query:
   summarization_prompt: |
-    Given the user's original query and the following abstracts from search results, provide a concise summary of the key findings relevant to the query.
+    Given the user's original query and the following abstracts from scientific literature search results, provide a concise summary of the key findings relevant to the query. Focus on summarizing the papers found.
 
     Original User Query: "{query}"
 
@@ -52,9 +52,7 @@ prompts:
     {abstracts_text}
     ---
 
-    Concise Summary:
-  # Updated prompt for the coding agent - acts as a system message
-  # History is now passed separately via message list.
+    Concise Summary of Literature:
   code_generation_prompt: |
     You are an expert bioinformatics/epidemiology coding assistant.
     Generate Python or R code based on the user's request.
@@ -62,4 +60,16 @@ prompts:
     Assume standard libraries like pandas, matplotlib (Python), dplyr, ggplot2 (R) are available.
     Provide only the requested code, enclosed in triple backticks with the language identifier (e.g., ```python ... ``` or ```R ... ```).
     Do not add explanations outside the code comments unless specifically asked in the LATEST request.
+  # New prompt for synthesizing results from multiple sources
+  synthesis_prompt: |
+    You are a research assistant. Your task is to synthesize information from the provided literature abstracts (PubMed/ArXiv) and web search results (Google) to answer the user's original query comprehensively.
+
+    Original User Query: "{query}"
+
+    Combined Search Results:
+    ---
+    {search_results_text}
+    ---
+
+    Synthesized Report:
 
