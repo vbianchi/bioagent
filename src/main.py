@@ -46,6 +46,7 @@ COLOR_DEBUG = Fore.BLUE; COLOR_RESET = Style.RESET_ALL; COLOR_FILE = Fore.LIGHTB
 COLOR_QUESTION = Fore.BLUE + Style.BRIGHT; COLOR_CODE = Fore.LIGHTYELLOW_EX; COLOR_SYNTHESIS = Fore.LIGHTGREEN_EX
 
 # --- Custom Colored Logging Formatter ---
+# (Class definition unchanged)
 class ColoredFormatter(logging.Formatter):
     LOG_COLORS = { logging.DEBUG: COLOR_DEBUG, logging.INFO: COLOR_INFO,
                    logging.WARNING: COLOR_WARN, logging.ERROR: COLOR_ERROR,
@@ -56,33 +57,37 @@ class ColoredFormatter(logging.Formatter):
         return log_fmt
 
 # --- Basic Logging Setup ---
+# (Setup unchanged)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__); logger.propagate = False
 console_handler = logging.StreamHandler(sys.stdout); console_handler.setLevel(logging.INFO)
 console_handler.setFormatter(ColoredFormatter()); logger.addHandler(console_handler)
-# File handler added in main block
 
 # --- Configuration Loading ---
 config = load_config(); logger.info("Configuration loaded.")
 
 # --- Environment Setup ---
+# (Setup unchanged)
 load_dotenv(); ENTREZ_EMAIL = os.getenv("ENTREZ_EMAIL")
 if not ENTREZ_EMAIL: logger.critical("ENTREZ_EMAIL not found in .env file."); sys.exit(1)
 from Bio import Entrez; Entrez.email = ENTREZ_EMAIL; logger.info(f"Entrez Email set to: {ENTREZ_EMAIL}")
 
 # --- LLM Instantiation ---
+# (Setup unchanged)
 llm = initialize_llm(config, "llm_provider", "llm_settings")
 if llm is None: sys.exit("Failed to initialize main LLM.")
 coding_llm = initialize_llm(config, "coding_agent_settings.llm_provider", "coding_agent_settings")
 if coding_llm is None: logger.warning("Failed to initialize specific coding LLM, falling back to main LLM."); coding_llm = llm
 
 # --- Search Settings ---
+# (Setup unchanged)
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
 NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5)
 logger.info(f"Search settings: max_lit_results={MAX_RESULTS_PER_SOURCE}, max_google={NUM_GOOGLE_RESULTS}, max_abstracts={MAX_ABSTRACTS_TO_SUMMARIZE}")
 
 # --- Prompt Templates ---
+# (Setup unchanged)
 ROUTING_PROMPT_TEMPLATE = get_config_value(config, "prompts.routing_prompt", "Error: Routing prompt not found.")
 REFINEMENT_PROMPT_TEMPLATE = get_config_value(config, "prompts.refinement_prompt", "Error: Refinement prompt not found.")
 SUMMARIZATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.summarization_prompt", "Error: Summarization prompt not found.")
@@ -90,7 +95,7 @@ CODE_GENERATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.code_generat
 SYNTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.synthesis_prompt", "Error: Synthesis prompt not found.")
 
 # --- Graph Definition ---
-# (Unchanged)
+# (Definition unchanged)
 graph_builder = StateGraph(AgentState); graph_builder.add_node("router", partial(route_query, llm=llm, routing_prompt_template=ROUTING_PROMPT_TEMPLATE))
 graph_builder.add_node("refine_query", partial(refine_query_node, llm=llm, refinement_prompt_template=REFINEMENT_PROMPT_TEMPLATE))
 graph_builder.add_node("literature_agent", partial(call_literature_agent, max_pubmed=MAX_RESULTS_PER_SOURCE, max_arxiv=MAX_RESULTS_PER_SOURCE))
@@ -124,6 +129,24 @@ def get_input(prompt: str) -> str:
     # (Unchanged)
     try: line = input(prompt); return line
     except EOFError: return 'quit'
+
+# --- Helper to format results for history ---
+def format_results_for_history(results: List[Dict[str, Any]], max_to_show: int = 3) -> str:
+    """Creates a concise string representation of search results for history."""
+    if not results: return "No results found."
+    lines = ["Found results:"]
+    for i, res in enumerate(results[:max_to_show]):
+        title = res.get('title', 'N/A')
+        authors = res.get('authors', [])
+        # <<< FIX: Include full author list (joined) instead of just first + et al. >>>
+        authors_str = ", ".join(authors) if authors else "N/A"
+        source = res.get('source', 'N/A')
+        res_id = res.get('id', 'N/A')
+        lines.append(f"{i+1}. {title} by {authors_str} ({source}: {res_id})")
+        # <<< End Fix >>>
+    if len(results) > max_to_show:
+        lines.append(f"... plus {len(results) - max_to_show} more.")
+    return "\n".join(lines)
 
 # --- Main Execution Block ---
 if __name__ == "__main__":
@@ -180,16 +203,16 @@ if __name__ == "__main__":
             else: logger.error("Graph execution did not produce a final state."); continue
 
             print(f"\n{COLOR_INFO}--- Agent Output (Interaction #{interaction_count}) ---{COLOR_RESET}")
-            agent_response = None
+            agent_response = None # This will hold the primary text response for history
+            output_message = None # Message to print to console
+            saved_filename = None # Track saved file for history message
+
             try: logger.debug("Final State: %s", json.dumps(final_state, indent=2, default=str))
             except Exception as dump_e: logger.warning(f"Could not serialize final state for logging: {dump_e}")
 
-            # --- REVISED Output Handling Logic ---
-            output_message = None
-            saved_filename = None
-
-            # Store results/summary from final_state into conversation_state *before* handling output
-            # This ensures they are available even if only summary is in final_state
+            # --- Output Handling Logic ---
+            # Update conversation state BEFORE determining output message
+            # Store the latest results/summary if they exist in the final state
             if final_state.get("search_results") is not None:
                  conversation_state["last_search_results"] = final_state.get("search_results")
             if final_state.get("summary") is not None:
@@ -210,8 +233,10 @@ if __name__ == "__main__":
                 logger.info("Synthesized report generated and displayed.")
                 saved_filename = f"synthesized_report_{interaction_count}.txt"
                 save_output(run_dir, os.path.join("results", saved_filename), report)
-                agent_response = report
-                # Note: last_search_results/last_summary already updated above if they were in final_state
+                # Include results list in agent_response for history
+                # Use the results stored in conversation_state from the lit search step
+                results_str = format_results_for_history(conversation_state.get("last_search_results", []), max_to_show=MAX_ABSTRACTS_TO_SUMMARIZE) # Use setting
+                agent_response = f"Synthesized Report:\n{report}\n\nBased on:\n{results_str}"
 
             elif final_state.get("generated_code"):
                 code = final_state["generated_code"]; language = final_state.get("generated_code_language", "text"); extension = {"python": "py", "r": "R"}.get(language, "txt"); filename = f"generated_code_{interaction_count}.{extension}"
@@ -219,39 +244,36 @@ if __name__ == "__main__":
                 logger.info(f"Code ({language}) generated and displayed.")
                 saved_filename = filename
                 save_output(run_dir, os.path.join("results", saved_filename), code);
-                agent_response = f"Generated {language} code snippet (saved to results/{saved_filename})."
-                conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None # Clear search context
+                agent_response = f"Generated {language} code snippet (saved to results/{saved_filename}):\n```\n{code}\n```"
+                conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
 
-            elif final_state.get("summary"): # Check summary only if no synthesis/code
+            elif final_state.get("summary"): # Lit search finished (no synthesis/code)
                 summary = final_state["summary"]
-                # <<< FIX: Get results from conversation_state, which was updated above >>>
-                results = conversation_state.get("last_search_results", [])
-                refined_query = final_state.get('refined_query', 'N/A') # Refined query is likely in final_state
+                results = conversation_state.get("last_search_results", []) # Get results from state
+                refined_query = final_state.get('refined_query', 'N/A')
                 output_lines = []
-
-                if results: # Only show summary if there were associated results
+                if results:
                     output_lines.append(f"{COLOR_OUTPUT}Found {len(results)} literature results (using refined query: '{refined_query}'):{COLOR_RESET}")
-                    # Save search results (if not already saved by literature agent - maybe remove save there?)
                     save_output(run_dir, os.path.join("results", f"search_results_{interaction_count}.json"), results);
                     for i, result in enumerate(results):
                         output_lines.append(f"\n{Style.BRIGHT}--- Result {i+1} ({result.get('source', 'N/A')}) ---{Style.NORMAL}")
                         output_lines.append(f"{COLOR_OUTPUT}  Title: {result.get('title', 'N/A')}{COLOR_RESET}")
                         output_lines.append(f"  ID: {result.get('id', 'N/A')}"); output_lines.append(f"  URL: {result.get('url', '#')}")
                         if result.get("local_pdf_path"): output_lines.append(f"  {COLOR_FILE}Downloaded PDF: {result['local_pdf_path']}{COLOR_RESET}")
-                    # Append summary
                     output_lines.append(f"\n{COLOR_SUMMARY}--- Summary of Results ---{COLOR_RESET}"); output_lines.append(f"{COLOR_SUMMARY}{summary}{COLOR_RESET}")
                     logger.info("Summary generated and displayed.")
                     saved_filename = f"summary_{interaction_count}.txt"
                     save_output(run_dir, os.path.join("results", saved_filename), summary);
-                    agent_response = summary # Use summary for history
-                else: # Case where summary node ran but no results were found/stored (less likely now)
+                    # <<< Include formatted results list in agent_response for history >>>
+                    results_str = format_results_for_history(results, max_to_show=MAX_ABSTRACTS_TO_SUMMARIZE) # Use setting
+                    agent_response = f"Summary:\n{summary}\n\nBased on:\n{results_str}"
+                else:
                     output_message = f"{COLOR_WARN}Summary generated but no associated search results found.{COLOR_RESET}"
                     logger.warning("Summary node ran without associated search results.")
                     agent_response = summary
                     saved_filename = f"summary_{interaction_count}.txt"
                     save_output(run_dir, os.path.join("results", saved_filename), summary);
-                    conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None # Clear search context
-
+                    conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
                 if output_lines: output_message = "\n".join(output_lines)
 
             elif final_state.get("chat_response"):
@@ -261,9 +283,7 @@ if __name__ == "__main__":
                 save_output(run_dir, os.path.join("results", saved_filename), agent_response);
                 conversation_state["last_search_results"] = None; conversation_state["last_summary"] = None
 
-            # Handle case where literature search ran but found nothing
-            # Check search_results is empty list, not just None
-            elif isinstance(final_state.get("search_results"), list) and not final_state.get("search_results"):
+            elif isinstance(final_state.get("search_results"), list) and not final_state.get("search_results"): # No results found case
                  refined_query = final_state.get('refined_query', 'N/A');
                  no_results_msg_local = f"No literature results found from PubMed or ArXiv for refined query: '{refined_query}'"
                  output_message = f"{COLOR_WARN}{no_results_msg_local}{COLOR_RESET}";
@@ -271,8 +291,7 @@ if __name__ == "__main__":
                  agent_response = no_results_msg_local; saved_filename=f"search_results_{interaction_count}.txt"; save_output(run_dir, os.path.join("results", saved_filename), no_results_msg_local)
                  conversation_state["last_search_results"] = []; conversation_state["last_summary"] = None
 
-            # Fallback if absolutely no other output generated and no error
-            elif not final_state.get("error"):
+            elif not final_state.get("error"): # Fallback
                  no_output_msg_local = "No specific output generated."; output_message = f"{COLOR_WARN}{no_output_msg_local}{COLOR_RESET}"
                  logger.warning("Graph finished without error but no standard output produced.")
                  agent_response = no_output_msg_local; saved_filename=f"output_{interaction_count}.txt"; save_output(run_dir, os.path.join("results", saved_filename), no_output_msg_local)
@@ -283,7 +302,6 @@ if __name__ == "__main__":
 
             # --- Update History ---
             if agent_response is not None:
-                 # Use the stripped initial query for history consistency
                  conversation_state["history"].append((initial_query.strip(), agent_response));
                  if len(conversation_state["history"]) > MAX_HISTORY_TURNS: conversation_state["history"] = conversation_state["history"][-MAX_HISTORY_TURNS:]
                  save_output(run_dir, os.path.join("logs", "conversation_history.json"), conversation_state["history"])
