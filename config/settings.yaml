@@ -21,12 +21,12 @@ coding_agent_settings:
 # Search Settings
 search_settings:
   max_results_per_source: 5
-  max_abstracts_to_summarize: 5
-  num_google_results: 5 # Number of Google results to fetch
+  max_abstracts_to_summarize: 5 # Also applies to lit results per plan item in deep search
+  num_google_results: 5 # Also applies per plan item in deep search
+  max_research_iterations: 3 # Max loops for deep research
 
 # Prompt Templates
 prompts:
-  # Updated routing prompt to include 'deep_research'
   routing_prompt: |
     Classify the user's query into one of the following categories: 'literature_search', 'code_generation', 'deep_research', or 'chat'. Respond ONLY with the category name.
 
@@ -60,8 +60,7 @@ prompts:
     Assume standard libraries like pandas, matplotlib (Python), dplyr, ggplot2 (R) are available.
     Provide only the requested code, enclosed in triple backticks with the language identifier (e.g., ```python ... ``` or ```R ... ```).
     Do not add explanations outside the code comments unless specifically asked in the LATEST request.
-  # New prompt for synthesizing results from multiple sources
-  synthesis_prompt: |
+  synthesis_prompt: | # This is now primarily for the old linear path, might be deprecated
     You are a research assistant. Your task is to synthesize information from the provided literature abstracts (PubMed/ArXiv) and web search results (Google) to answer the user's original query comprehensively.
 
     Original User Query: "{query}"
@@ -72,4 +71,84 @@ prompts:
     ---
 
     Synthesized Report:
+
+  # --- Prompts for New Deep Research Workflow ---
+  hypothesis_prompt: |
+    You are a research assistant tasked with initiating a deep investigation into a user's query.
+    Analyze the user's query below and perform the following steps:
+    1. Formulate a single, clear, and concise primary research question or a testable hypothesis that captures the core of the user's request. This should guide the subsequent research.
+    2. Outline an initial search plan by creating an **enumerated list** (numbered 1., 2., 3., etc.) of the key concepts, specific sub-questions, or sub-topics that should be searched sequentially across scientific literature (PubMed/ArXiv) and the web (Google) to address the hypothesis/question. Aim for 3-5 initial items.
+
+    Respond ONLY with the following structure, replacing the bracketed text:
+    Hypothesis: [Your formulated hypothesis or research question]
+    Initial Search Plan:
+    1. [First sub-topic or question]
+    2. [Second sub-topic or question]
+    3. [Third sub-topic or question]
+    ...
+
+    User Query: "{query}"
+
+  evaluation_prompt: |
+    You are a research analyst evaluating evidence gathered so far for a research question/hypothesis.
+    Hypothesis/Question: {hypothesis}
+    Evidence Log (Snippets/Abstracts gathered in the last round, tagged by plan item):
+    ---
+    {evidence_text} # This will contain formatted snippets/abstracts with source info and plan_item tag
+    ---
+    Based *only* on the evidence provided from the *latest* search round:
+    1. Briefly summarize how well the new evidence addresses the overall hypothesis/question.
+    2. Identify key gaps, contradictions, or areas needing further investigation based *only* on the provided evidence.
+    3. Decide if more research iterations are needed to adequately address the hypothesis (Respond with "Decision: Continue Research" or "Decision: Conclude Research").
+    4. If continuing, propose a **new enumerated list** (1., 2., 3...) for the *next* search plan, focusing on the identified gaps or more specific questions. If concluding, state "N/A".
+
+    Respond ONLY with the following structure:
+    Evaluation Summary: [Your brief summary of latest findings]
+    Gaps/Next Steps: [Your identified gaps/questions]
+    Decision: [Continue Research / Conclude Research]
+    Refined Search Plan:
+    [1. Next question/topic...]
+    [2. Another question/topic...]
+    [... or N/A if concluding]
+
+  # <<< New Prompt for Refining Plan based on User Feedback >>>
+  refine_plan_prompt: |
+    You are a research assistant helping a user refine their research plan.
+    The user was presented with the following initial plan:
+    Original Hypothesis: {original_hypothesis}
+    Original Search Plan:
+    {original_plan}
+
+    The user suggested the following modifications:
+    User Feedback: {user_feedback}
+
+    Based on the user's feedback, please generate a *revised* hypothesis and a *revised* enumerated search plan (numbered 1., 2., 3...).
+    If the feedback is unclear or doesn't suggest specific changes, try to incorporate the sentiment or make minimal adjustments to the original plan.
+
+    Respond ONLY with the following structure:
+    Refined Hypothesis: [Your revised hypothesis or the original if no change needed]
+    Refined Search Plan:
+    1. [First revised sub-topic or question]
+    2. [Second revised sub-topic or question]
+    ...
+
+  final_report_prompt: |
+    You are a scientific writer synthesizing research findings into a comprehensive report.
+    Original User Query: {query}
+    Investigated Hypothesis/Question: {hypothesis}
+    Collected Evidence Log (Tagged by plan item):
+    ---
+    {evidence_text} # This will contain formatted snippets/abstracts with source info and the plan_item tag
+    ---
+    Based *only* on the provided evidence log, write a detailed, well-structured essay (aiming for approx. 1000-1500 words or 3-4 pages) that addresses the original user query and the investigated hypothesis.
+    Structure your response with:
+    - An introduction setting the context based on the query/hypothesis.
+    - Body paragraphs synthesizing findings. Try to group findings based on the 'plan_item' they relate to, creating logical sections.
+    - Explicitly reference the source of information within the text using simple markers (e.g., "[Source: PubMed ID 12345]", "[Source: ArXiv ID 67890]", "[Source: Google Result 2]"). Use the 'source_id' provided in the evidence log.
+    - A conclusion summarizing the key findings and limitations based *only* on the provided evidence.
+    - A final section listing all unique sources referenced (e.g., "References:\n- PubMed:12345 - Title...\n- ArXiv:67890 - Title...\n- Google Result 2 - Title... URL: http://...") - Extract Title and URL from evidence log entries.
+
+    Ensure the report flows logically and directly uses the information from the evidence log. Do not invent information.
+
+    Final Report:
 

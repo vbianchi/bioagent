@@ -27,18 +27,19 @@ def call_google_search_agent(state: AgentState, google_search_tool: Any, num_res
         # <<< Pass the tool object to the wrapper function >>>
         google_search_results = search_google(
             query=refined_query,
-            search_tool=google_search_tool,
+            search_tool=google_search_tool, # Pass the actual tool object
             num_results=num_results
         )
         # Check if the result itself indicates an error from the tool wrapper
         if google_search_results and isinstance(google_search_results[0], dict) and "error" in google_search_results[0]:
              search_error = f"Google Search tool error: {google_search_results[0]['error']}"
+             # Append error to existing errors, don't overwrite
              error_message = (error_message + "; " + search_error) if error_message else search_error
              google_search_results = [] # Clear results if tool reported error
 
     except Exception as e:
-        # Catch unexpected errors during the call
-        search_error = f"Unexpected error calling search_google: {str(e)}"
+        # Catch unexpected errors during the call to search_google
+        search_error = f"Unexpected error calling search_google wrapper: {str(e)}"
         logger.error(search_error, exc_info=True)
         error_message = (error_message + "; " + search_error) if error_message else search_error
         google_search_results = []
