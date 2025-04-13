@@ -56,8 +56,8 @@ from src.agents.deep_research import (
     get_plan_modifications,  # <<< New node >>>
     refine_plan_with_feedback, # <<< New node >>>
     execute_search_plan,
-    evaluate_findings,
-    generate_final_report
+    evaluate_findings, # <<< Now implemented >>>
+    generate_final_report # Placeholder
 )
 
 # --- Initialize Colorama ---

@@ -1,5 +1,6 @@
 import logging
 import re # For parsing LLM responses
+import sys # <<< Added import sys >>>
 from typing import Dict, Any, List, Optional
 
 # Import central AgentState definition
@@ -24,7 +25,7 @@ COLOR_INPUT = Fore.YELLOW # For user input prompt
 logger = logging.getLogger(__name__)
 
 # --- Node Function: Start Deep Research ---
-# (No changes needed in this function from v1.6)
+# (No changes needed in this function from v1.7)
 def start_deep_research(state: AgentState, llm: BaseChatModel, hypothesis_prompt_template: str) -> AgentState:
     """
     Initializes the deep research process.
@@ -64,11 +65,13 @@ def start_deep_research(state: AgentState, llm: BaseChatModel, hypothesis_prompt
         hypothesis = "Could not parse hypothesis." # Default
         parsed_search_plan_items = []
 
+        # Extract Hypothesis
         hyp_match = re.search(r"Hypothesis:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
         if hyp_match:
             potential_hyp = hyp_match.group(1).split("Initial Search Plan:")[0].strip()
             if potential_hyp: hypothesis = potential_hyp
 
+        # Extract Enumerated List Items for Plan
         plan_match = re.search(r"Initial Search Plan:\s*\n(.*?)(?:\n\n|\Z)", response_text, re.IGNORECASE | re.DOTALL)
         if plan_match:
             plan_block = plan_match.group(1).strip()
@@ -91,7 +94,7 @@ def start_deep_research(state: AgentState, llm: BaseChatModel, hypothesis_prompt
         hypothesis = "Error during formulation."
         search_plan_list = []
         more_research_needed = False
-        plan_approved = "no" # Deny plan if formulation fails
+        plan_approved = "no"
 
     # Return the entire state merged with updates
     return {
@@ -102,13 +105,13 @@ def start_deep_research(state: AgentState, llm: BaseChatModel, hypothesis_prompt
         "research_iterations": research_iterations,
         "evaluation_summary": evaluation_summary,
         "more_research_needed": more_research_needed,
-        "plan_approved": plan_approved, # Starts as None
+        "plan_approved": plan_approved,
         "plan_modifications": plan_modifications, # Starts as None
         "error": error_message
     }
 
-# --- Node Function: Ask for Plan Approval (v1.7 - Add Modify Option) ---
-
+# --- Node Function: Ask for Plan Approval ---
+# (No changes needed in this function from v1.7)
 def ask_plan_approval(state: AgentState) -> AgentState:
     """
     Presents the generated/refined hypothesis and search plan list to the user.
@@ -131,14 +134,10 @@ def ask_plan_approval(state: AgentState) -> AgentState:
         print(f"\n{Style.BRIGHT}Search Plan Items:{Style.NORMAL}\n{plan_display}")
         print(f"{COLOR_OUTPUT}----------------------------------------{COLOR_RESET}")
         try:
-            # <<< Updated Prompt for User >>>
             user_input = input(f"\n{COLOR_QUESTION}Approve plan (yes), suggest modifications (mod), or reject (no)?: {COLOR_RESET}").strip().lower()
-            if user_input == "yes" or user_input == "y":
-                approval = "yes"; logger.info("User approved the research plan.")
-            elif user_input == "mod" or user_input == "m":
-                 approval = "mod"; logger.info("User wants to modify the research plan.")
-            else:
-                approval = "no"; logger.info("User rejected the research plan. Stopping deep research.")
+            if user_input == "yes" or user_input == "y": approval = "yes"; logger.info("User approved the research plan.")
+            elif user_input == "mod" or user_input == "m": approval = "mod"; logger.info("User wants to modify the research plan.")
+            else: approval = "no"; logger.info("User rejected the research plan. Stopping deep research.")
         except (EOFError, KeyboardInterrupt): logger.warning("Input interrupted during plan approval. Defaulting to 'no'."); approval = "no"
         except Exception as e: logger.error(f"Error reading plan approval input: {e}", exc_info=True); error_message = (error_message + f"; Error reading plan approval: {e}") if error_message else f"Error reading plan approval: {e}"; approval = "no"
     elif run_dir is None:
@@ -153,12 +152,12 @@ def ask_plan_approval(state: AgentState) -> AgentState:
     return {**state, "plan_approved": approval, "plan_modifications": None, "error": error_message}
 
 
-# --- Node Function: Get Plan Modifications (New v1.7) ---
+# --- Node Function: Get Plan Modifications (Fix v1.8) ---
 
 def get_plan_modifications(state: AgentState) -> AgentState:
     """
     Prompts the user (CLI only) to enter their suggested modifications to the plan.
-    Stores the input in 'plan_modifications'.
+    Stores the input in 'plan_modifications'. Requires 'sys' module to be imported.
     """
     logger.info("--- Getting Plan Modifications from User ---")
     run_dir = state.get("run_dir")
@@ -168,8 +167,8 @@ def get_plan_modifications(state: AgentState) -> AgentState:
     if run_dir is not None: # Only prompt in CLI mode
         try:
             print(f"\n{COLOR_OUTPUT}Please describe the changes you'd like to make to the hypothesis or search plan items below.{COLOR_RESET}")
-            # Use a simple multi-line input method for now
             print(f"{COLOR_INPUT}Enter your suggestions (press Ctrl+D or Ctrl+Z then Enter when done):{COLOR_RESET}")
+            # <<< Use sys.stdin to read potentially multiple lines >>>
             lines = sys.stdin.readlines()
             modifications = "".join(lines).strip()
             if modifications:
@@ -180,6 +179,10 @@ def get_plan_modifications(state: AgentState) -> AgentState:
 
         except (EOFError, KeyboardInterrupt):
             logger.warning("Input interrupted while getting modifications. Proceeding without changes.")
+            modifications = None
+        except NameError as ne: # Catch if sys is still not imported somehow
+            logger.error(f"NameError during input reading (is 'sys' imported?): {ne}", exc_info=True)
+            error_message = (error_message + f"; NameError reading modifications: {ne}") if error_message else f"NameError reading modifications: {ne}"
             modifications = None
         except Exception as e:
             logger.error(f"Error reading plan modifications: {e}", exc_info=True)
@@ -192,8 +195,8 @@ def get_plan_modifications(state: AgentState) -> AgentState:
     return {**state, "plan_modifications": modifications, "error": error_message}
 
 
-# --- Node Function: Refine Plan with Feedback (New v1.7) ---
-
+# --- Node Function: Refine Plan with Feedback ---
+# (No changes needed in this function from v1.7)
 def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan_prompt_template: str) -> AgentState:
     """
     Uses an LLM to re-draft the hypothesis and search plan based on user feedback.
@@ -205,24 +208,19 @@ def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan
     user_modifications = state.get("plan_modifications")
     error_message = state.get("error")
 
-    # If no modifications were provided, just return the current state
     if not user_modifications:
         logger.warning("No user modifications provided. Skipping plan refinement.")
-        # Ensure plan_approved is reset so we don't loop infinitely if user hit 'mod' then entered nothing
         return {**state, "plan_approved": None}
 
-    # Format the original plan for the prompt
     original_plan_display = "\n".join([f"{i+1}. {item}" for i, item in enumerate(original_plan_list)])
 
-    # Check prompt template
     if "Error:" in refine_plan_prompt_template:
         logger.error("Refine plan prompt template not loaded correctly.")
         err_msg = "Config error: Refine plan prompt missing."
-        # Keep original plan, add error, set approval to None to avoid loop
         return {**state, "error": (error_message or "") + "; " + err_msg, "plan_approved": None}
 
-    new_hypothesis = original_hypothesis # Default to original
-    new_search_plan_list = original_plan_list # Default to original
+    new_hypothesis = original_hypothesis
+    new_search_plan_list = original_plan_list
 
     try:
         logger.info("Calling LLM to refine plan based on user feedback...")
@@ -237,14 +235,12 @@ def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan
 
         # --- Parse LLM Response for Refined Hypothesis and Plan ---
         parsed_new_plan_items = []
-        # Extract Hypothesis
         hyp_match = re.search(r"Refined Hypothesis:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
         if hyp_match:
             potential_hyp = hyp_match.group(1).split("Refined Search Plan:")[0].strip()
             if potential_hyp: new_hypothesis = potential_hyp
 
-        # Extract Enumerated List Items for Plan
-        plan_match = re.search(r"Refined Search Plan:\s*\n(.*?)(?:\n\n|\Z)", response_text, re.IGNORECASE | re.DOTALL)
+        plan_match = re.search(r"Refined Search Plan:\s*\n?(.*)", response_text, re.IGNORECASE | re.DOTALL)
         if plan_match:
             plan_block = plan_match.group(1).strip()
             list_items = re.findall(r"^\s*(?:\d+\.|[-*+])\s+(.*)", plan_block, re.MULTILINE)
@@ -256,17 +252,14 @@ def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan
             logger.info(f"Parsed Refined Search Plan List: {new_search_plan_list}")
         else:
              logger.warning("Could not parse enumerated 'Refined Search Plan:' list. Keeping original plan.")
-             # Keep original plan if parsing fails
 
     except Exception as e:
         refine_error = f"LLM call failed during plan refinement: {e}"
         logger.error(refine_error, exc_info=True)
         error_message = (error_message + "; " + refine_error) if error_message else refine_error
-        # Keep original plan on error
         new_hypothesis = original_hypothesis
         new_search_plan_list = original_plan_list
 
-    # Return state with updated plan/hypothesis, clear approval status to force re-asking
     return {
         **state,
         "hypothesis": new_hypothesis,
@@ -278,7 +271,7 @@ def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan
 
 
 # --- Node Function: Execute Search Plan ---
-# (Content from agents_deep_research_v1.6 - no changes here)
+# (No changes needed in this function from v1.6)
 def execute_search_plan(state: AgentState, google_search_tool_object: Optional[Any]) -> AgentState:
     """
     Executes literature (PubMed/ArXiv) and web (Google) searches for each item
@@ -357,8 +350,8 @@ def execute_search_plan(state: AgentState, google_search_tool_object: Optional[A
     return {**state, "evidence_log": updated_evidence_log, "search_results": None, "google_results": None, "error": error_message}
 
 
-# --- Node Function: Evaluate Findings (v1.7 - Needs Implementation) ---
-
+# --- Node Function: Evaluate Findings (Implemented v1.6) ---
+# (No changes needed in this function from v1.6)
 def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_template: str) -> AgentState:
      """
      Evaluates the evidence gathered so far against the hypothesis using an LLM.
@@ -386,11 +379,9 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
      evidence_texts = []
      MAX_EVIDENCE_CHARS = 4000 # Adjust as needed
      current_chars = 0; items_included = 0
-     # Focus on evidence added in the *last* round if possible, or just recent evidence
-     # Simple approach: take recent items from the log
-     relevant_evidence = evidence_log[-50:] # Limit context window for evaluation prompt
+     relevant_evidence = evidence_log[-50:] # Limit context window
      for entry in reversed(relevant_evidence):
-         entry_text = f"Source: {entry.get('source_id', 'N/A')} (Related to: {entry.get('plan_item', 'N/A')})\nContent Snippet: {entry.get('content', '')[:300]}...\n---\n" # Shorter snippet for evaluation
+         entry_text = f"Source: {entry.get('source_id', 'N/A')} (Related to: {entry.get('plan_item', 'N/A')})\nContent Snippet: {entry.get('content', '')[:300]}...\n---\n"
          if current_chars + len(entry_text) > MAX_EVIDENCE_CHARS and items_included > 0:
              logger.warning(f"Truncating evidence log for evaluation prompt at {items_included} items due to length.")
              break
@@ -415,7 +406,7 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
          plan_match = re.search(r"Refined Search Plan:\s*\n?(.*)", response_text, re.IGNORECASE | re.DOTALL)
 
          if summary_match:
-             evaluation_summary = summary_match.group(1).split("Gaps/Next Steps:")[0].split("Decision:")[0].strip() # More robust extraction
+             evaluation_summary = summary_match.group(1).split("Gaps/Next Steps:")[0].split("Decision:")[0].strip()
              logger.info(f"Parsed Evaluation Summary: {evaluation_summary}")
          else: logger.warning("Could not parse 'Evaluation Summary:' from LLM response."); evaluation_summary = "LLM response format error."
 
@@ -431,7 +422,7 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
                  list_items = re.findall(r"^\s*(?:\d+\.|[-*+])\s+(.*)", plan_block, re.MULTILINE)
                  if list_items: next_search_plan_list = [item.strip() for item in list_items]; logger.info(f"Parsed Refined Search Plan List: {next_search_plan_list}")
                  else: logger.warning("Could not parse enumerated list from 'Refined Search Plan:'. Stopping research."); more_research_needed = False; next_search_plan_list = []
-             else: logger.info("Refined Search Plan is 'N/A'. Stopping research."); more_research_needed = False; next_search_plan_list = [] # Handle explicit N/A
+             else: logger.info("Refined Search Plan is 'N/A'. Stopping research."); more_research_needed = False; next_search_plan_list = []
          elif more_research_needed: logger.warning("Decision 'Continue' but no 'Refined Search Plan:' found/parsed. Stopping."); more_research_needed = False; next_search_plan_list = []
          else: next_search_plan_list = [] # Concluding
 
@@ -452,7 +443,7 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
 
 
 # --- Node Function: Generate Final Report (Placeholder) ---
-
+# (No changes needed in this function from v1.7)
 def generate_final_report(state: AgentState) -> AgentState:
      """Placeholder node for generating the final synthesized report."""
      logger.info("--- (Placeholder) Generating Final Report ---")
@@ -461,4 +452,3 @@ def generate_final_report(state: AgentState) -> AgentState:
      # This function *will* need llm and final_report_prompt_template passed via partial once implemented.
      # TODO: Update state['synthesized_report'] with the generated report
      return {**state, "synthesized_report": "This is a placeholder final report based on the refined approach."}
-
