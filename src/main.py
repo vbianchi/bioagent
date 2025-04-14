@@ -49,7 +49,7 @@ from src.agents.deep_research import (
     get_plan_modifications,
     refine_plan_with_feedback,
     execute_search_plan,
-    evaluate_findings,   # <<< Now implemented >>>
+    evaluate_findings,   # Implemented
     generate_final_report # Placeholder
 )
 
@@ -98,10 +98,9 @@ logger.info("Language Models initialized.")
 # --- Search Settings & Deep Research Settings ---
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
-# <<< Use the DDG key now >>>
-NUM_DDG_RESULTS = get_config_value(config, "search_settings.num_ddg_results", 5)
+NUM_DDG_RESULTS = get_config_value(config, "search_settings.num_ddg_results", 5) # Use DDG key
 MAX_RESEARCH_ITERATIONS = get_config_value(config, "search_settings.max_research_iterations", 3)
-logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxDDG={NUM_DDG_RESULTS}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}") # Updated log
+logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxDDG={NUM_DDG_RESULTS}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}")
 logger.info(f"Deep Research settings: MaxIter={MAX_RESEARCH_ITERATIONS}")
 
 # --- Prompt Templates ---
@@ -118,7 +117,8 @@ prompt_templates = {k: v for k, v in locals().items() if k.endswith('_PROMPT_TEM
 for name, template in prompt_templates.items():
     if isinstance(template, str) and template.startswith("Error:"): logger.error(f"Prompt '{name}' failed load!");
 
-# <<< Google Search Tool Setup Removed >>>
+# --- DuckDuckGo Tool Setup (No API Key Needed) ---
+# DDG Tool is instantiated within the search function in tools/web_search.py
 
 # --- Conditional Edge Logic ---
 def decide_after_refine(state: AgentState) -> str:
@@ -151,6 +151,39 @@ def decide_next_research_step(state: AgentState) -> str:
     else: logger.info("Decision: Conclude research."); return "generate_final_report"
 # --- End Conditional Edge Logic ---
 
+# ==================================
+# Helper Functions (Restored)
+# ==================================
+def save_output(run_dir: str, relative_path: str, data: Any):
+    """Saves data (string or JSON) to a file within the run directory."""
+    if not run_dir: logger.warning("Cannot save output: run_dir not set."); return
+    filepath = os.path.join(run_dir, relative_path)
+    try:
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        with open(filepath, 'w', encoding='utf-8') as f:
+            if isinstance(data, str): f.write(data)
+            else: json.dump(data, f, indent=2, default=str)
+        logger.info(f"Output successfully saved to: {filepath}")
+    except Exception as e: logger.error(f"Failed to save output to {filepath}: {e}", exc_info=True)
+
+def get_input(prompt: str) -> str:
+    """Gets a single line of input from the user via the console."""
+    try: line = input(prompt); return line
+    except (EOFError, KeyboardInterrupt): logger.info("Input interrupted, treating as 'quit'."); return 'quit'
+
+def format_results_for_history(results: Optional[List[Dict[str, Any]]], max_to_show: int = 3) -> str:
+    """Creates a concise string representation of search results for conversation history."""
+    if not results: return "No results found."
+    lines = ["Found results:"]; count = 0
+    for i, res in enumerate(results):
+        if count >= max_to_show: lines.append(f"... plus {len(results) - max_to_show} more."); break
+        title = res.get('title', 'N/A'); authors = res.get('authors', [])
+        authors_str = ", ".join(map(str, authors)) if authors else "N/A"
+        source = res.get('source', 'N/A'); res_id = res.get('id', 'N/A')
+        lines.append(f"{i+1}. {title} by {authors_str} ({source}: {res_id})")
+        count += 1
+    return "\n".join(lines)
+# ==================================
 
 # --- Graph Definition ---
 logger.info("Defining agent graph...")
@@ -171,9 +204,8 @@ graph_builder.add_node("start_deep_research", partial(start_deep_research, llm=d
 graph_builder.add_node("ask_plan_approval", ask_plan_approval)
 graph_builder.add_node("get_plan_modifications", get_plan_modifications)
 graph_builder.add_node("refine_plan_with_feedback", partial(refine_plan_with_feedback, llm=deep_research_llm, refine_plan_prompt_template=REFINE_PLAN_PROMPT_TEMPLATE))
-# <<< Updated: Pass run_dir to execute_search_plan for saving results >>>
-graph_builder.add_node("execute_search_plan", partial(execute_search_plan, run_dir=None)) # Pass run_dir=None initially, will be updated from state
-# <<< Updated: Pass args to evaluate_findings now that it's implemented >>>
+# Pass run_dir via partial now, as it's needed for saving results
+graph_builder.add_node("execute_search_plan", partial(execute_search_plan, run_dir=None)) # run_dir will be updated from state at runtime
 graph_builder.add_node("evaluate_findings", partial(evaluate_findings, llm=deep_research_llm, evaluation_prompt_template=EVALUATION_PROMPT_TEMPLATE))
 # Pass only function for generate_final_report placeholder
 graph_builder.add_node("generate_final_report", generate_final_report)
@@ -207,18 +239,6 @@ try: app = graph_builder.compile(); logger.info("Agent graph compiled successful
 except Exception as compile_e: logger.critical(f"Failed to compile agent graph: {compile_e}", exc_info=True); sys.exit(1)
 # --- End Graph Definition ---
 
-
-# --- Helper Function to Save Output Files ---
-# Moved definition to top level for import into agents
-# def save_output(...): ...
-
-# --- Helper Function for CLI Input ---
-# Moved definition to top level
-# def get_input(...): ...
-
-# --- Helper Function to Format Results for History ---
-# Moved definition to top level
-# def format_results_for_history(...): ...
 
 # ==================================
 # Main Execution Block (CLI)
@@ -254,6 +274,7 @@ if __name__ == "__main__":
     while True:
         interaction_count += 1
         prompt_text = f"\n{COLOR_INPUT}Enter query {interaction_count} (or type 'quit'): {COLOR_RESET} "
+        # <<< Call the defined get_input function >>>
         initial_query = get_input(prompt_text)
         if initial_query.strip().lower() == 'quit': logger.info("Quit command received. Exiting."); break
         if not initial_query.strip(): print(f"{COLOR_WARN}Please enter a query or message.{COLOR_RESET}"); interaction_count -= 1; continue
@@ -273,11 +294,11 @@ if __name__ == "__main__":
         final_state: Optional[AgentState] = None
         try:
             stream_config: Dict[str, Any] = {"recursion_limit": 35}
-            # Inject run_dir into the config for execute_search_plan node
-            # LangGraph merges this config with the state for node execution
-            node_configs = {"execute_search_plan": {"run_dir": run_dir}}
+            # Pass run_dir via config to the specific node if needed
+            # Although execute_search_plan now gets it from state via the AgentState definition
+            # node_configs = {"execute_search_plan": {"run_dir": run_dir}} # Not strictly needed if state has run_dir
 
-            for event in app.stream(input_for_graph, config=stream_config): # Pass node_configs if needed, but state has run_dir
+            for event in app.stream(input_for_graph, config=stream_config):
                 node_name = list(event.keys())[0]; node_output_state = event[node_name]
                 logger.debug(f"Node '{node_name}' executed."); final_state = node_output_state
 
