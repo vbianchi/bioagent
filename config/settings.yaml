@@ -20,13 +20,14 @@ coding_agent_settings:
 
 # Search Settings
 search_settings:
-  max_results_per_source: 5
-  max_abstracts_to_summarize: 5 # Also applies to lit results per plan item in deep search
-  num_google_results: 5 # Also applies per plan item in deep search
+  max_results_per_source: 5 # Max results for PubMed/ArXiv per plan item
+  max_abstracts_to_summarize: 5 # Max abstracts for literature_search path summary
+  num_ddg_results: 5 # <<< Renamed/Re-added for DuckDuckGoSearchResults >>>
   max_research_iterations: 3 # Max loops for deep research
 
 # Prompt Templates
 prompts:
+  # Updated routing prompt to include 'deep_research'
   routing_prompt: |
     Classify the user's query into one of the following categories: 'literature_search', 'code_generation', 'deep_research', or 'chat'. Respond ONLY with the category name.
 
@@ -38,7 +39,7 @@ prompts:
     User Query: "{query}"
     Classification:
   refinement_prompt: |
-    Given the user's query, extract the core topic or keywords suitable for searching scientific databases (PubMed, ArXiv) AND web search engines (Google). Focus on nouns, technical terms, essential concepts. Remove conversational phrases. Respond ONLY with the refined search query string.
+    Given the user's query, extract the core topic or keywords suitable for searching scientific databases (PubMed, ArXiv) AND web search engines (e.g., DuckDuckGo). Focus on nouns, technical terms, essential concepts. Remove conversational phrases. Respond ONLY with the refined search query string.
 
     User Query: "{query}"
     Refined Search Query:
@@ -61,7 +62,7 @@ prompts:
     Provide only the requested code, enclosed in triple backticks with the language identifier (e.g., ```python ... ``` or ```R ... ```).
     Do not add explanations outside the code comments unless specifically asked in the LATEST request.
   synthesis_prompt: | # This is now primarily for the old linear path, might be deprecated
-    You are a research assistant. Your task is to synthesize information from the provided literature abstracts (PubMed/ArXiv) and web search results (Google) to answer the user's original query comprehensively.
+    You are a research assistant. Your task is to synthesize information from the provided literature abstracts (PubMed/ArXiv) and web search results to answer the user's original query comprehensively.
 
     Original User Query: "{query}"
 
@@ -77,7 +78,7 @@ prompts:
     You are a research assistant tasked with initiating a deep investigation into a user's query.
     Analyze the user's query below and perform the following steps:
     1. Formulate a single, clear, and concise primary research question or a testable hypothesis that captures the core of the user's request. This should guide the subsequent research.
-    2. Outline an initial search plan by creating an **enumerated list** (numbered 1., 2., 3., etc.) of the key concepts, specific sub-questions, or sub-topics that should be searched sequentially across scientific literature (PubMed/ArXiv) and the web (Google) to address the hypothesis/question. Aim for 3-5 initial items.
+    2. Outline an initial search plan by creating an **enumerated list** (numbered 1., 2., 3., etc.) of the key concepts, specific sub-questions, or sub-topics that should be searched sequentially across scientific literature (PubMed/ArXiv) and the web (DuckDuckGo) to address the hypothesis/question. Aim for 3-5 initial items.
 
     Respond ONLY with the following structure, replacing the bracketed text:
     Hypothesis: [Your formulated hypothesis or research question]
@@ -111,7 +112,6 @@ prompts:
     [2. Another question/topic...]
     [... or N/A if concluding]
 
-  # <<< New Prompt for Refining Plan based on User Feedback >>>
   refine_plan_prompt: |
     You are a research assistant helping a user refine their research plan.
     The user was presented with the following initial plan:
@@ -144,9 +144,9 @@ prompts:
     Structure your response with:
     - An introduction setting the context based on the query/hypothesis.
     - Body paragraphs synthesizing findings. Try to group findings based on the 'plan_item' they relate to, creating logical sections.
-    - Explicitly reference the source of information within the text using simple markers (e.g., "[Source: PubMed ID 12345]", "[Source: ArXiv ID 67890]", "[Source: Google Result 2]"). Use the 'source_id' provided in the evidence log.
+    - Explicitly reference the source of information within the text using simple markers (e.g., "[Source: PubMed ID 12345]", "[Source: ArXiv ID 67890]", "[Source: DuckDuckGo Result 2]"). Use the 'source_id' provided in the evidence log.
     - A conclusion summarizing the key findings and limitations based *only* on the provided evidence.
-    - A final section listing all unique sources referenced (e.g., "References:\n- PubMed:12345 - Title...\n- ArXiv:67890 - Title...\n- Google Result 2 - Title... URL: http://...") - Extract Title and URL from evidence log entries.
+    - A final section listing all unique sources referenced (e.g., "References:\n- PubMed:12345 - Title...\n- ArXiv:67890 - Title...\n- DuckDuckGo:2 - Title... URL: http://...") - Extract Title and URL from evidence log entries.
 
     Ensure the report flows logically and directly uses the information from the evidence log. Do not invent information.
 

@@ -2,6 +2,7 @@ import logging
 import re # For parsing LLM responses
 import sys
 from typing import Dict, Any, List, Optional
+import json # For parsing potential JSON string from DDG tool
 
 # Import central AgentState definition
 from src.core.state import AgentState
@@ -9,12 +10,20 @@ from src.core.state import AgentState
 from src.core.config_loader import load_config, get_config_value
 # Import search tool functions
 from src.tools.literature_search import search_pubmed, search_arxiv
-# <<< Import DDG search instead of Google >>>
 from src.tools.web_search import search_duckduckgo
 # Import LLM type hint
 from langchain_core.language_models.chat_models import BaseChatModel
 # Import colors for CLI output
 from colorama import Fore, Style
+# Import save_output function (adjust path if moved later)
+try:
+    from src.main import save_output
+except ImportError:
+    # Fallback if running file directly or structure changes
+    def save_output(run_dir, relative_path, data):
+        print(f"[save_output stub] Would save to {run_dir}/{relative_path}")
+        pass
+
 
 # Define colors used in this module (or import from main)
 COLOR_QUESTION = Fore.BLUE + Style.BRIGHT
@@ -129,15 +138,16 @@ def refine_plan_with_feedback(state: AgentState, llm: BaseChatModel, refine_plan
     return {**state, "hypothesis": new_hypothesis, "search_plan": new_search_plan_list, "plan_approved": None, "plan_modifications": None, "error": error_message}
 
 
-# --- Node Function: Execute Search Plan (v1.9 - Use DDG) ---
+# --- Node Function: Execute Search Plan (v1.12 - Add Print/Save) ---
 
-def execute_search_plan(state: AgentState) -> AgentState: # Removed config and tool object params
+def execute_search_plan(state: AgentState, run_dir: Optional[str]) -> AgentState: # Added run_dir
     """
-    Executes literature (PubMed/ArXiv) and web (DuckDuckGo) searches for each item
-    in the current search_plan list. Formats results (snippets for web)
-    and appends them to the evidence_log. Loads config internally.
+    Executes searches for each item in the plan list, logs details, saves raw results,
+    and appends formatted findings to the evidence_log. Loads config internally.
     """
-    logger.info("--- Executing Search Plan Node ---")
+    # Use print for critical flow points to bypass potential logging issues
+    print("\n--- Entering Execute Search Plan Node ---")
+    logger.info("--- Entering Execute Search Plan Node ---") # Keep logger too
     search_plan_list = state.get("search_plan", [])
     current_evidence_log = state.get("evidence_log", [])
     error_message = state.get("error")
@@ -150,92 +160,98 @@ def execute_search_plan(state: AgentState) -> AgentState: # Removed config and t
         error_message = (error_message + "; Failed to load config in search node") if error_message else "Failed to load config in search node"
         max_lit, max_web_results = 3, 5 # Defaults
     else:
-        # Get search limits from config
         max_lit = get_config_value(config, "search_settings.max_results_per_source", 3)
-        # Note: DDGSearchRun doesn't directly use num_results, but we keep setting for potential future use
-        max_web_results = get_config_value(config, "search_settings.num_google_results", 5) # Keep old key for now
+        max_web_results = get_config_value(config, "search_settings.num_ddg_results", 5)
 
     if not search_plan_list:
+        print(f"{COLOR_WARN}Search plan list is empty for iteration {iteration+1}. Skipping search execution.{COLOR_RESET}")
         logger.warning(f"Search plan list is empty for iteration {iteration+1}. Skipping search execution.")
         return {**state}
 
+    print(f"{COLOR_INFO}Executing search iteration {iteration+1} with {len(search_plan_list)} plan items.{COLOR_RESET}")
     logger.info(f"Executing search iteration {iteration+1} with {len(search_plan_list)} plan items.")
-    logger.debug(f"Using search limits per item: max_lit={max_lit} (Web results determined by DDG tool)")
+    logger.debug(f"Using search limits per item: max_lit={max_lit}, max_web={max_web_results}")
 
     round_evidence: List[Dict[str, Any]] = []
 
+    print(f"{COLOR_INFO}Starting search loop over plan items...{COLOR_RESET}")
+    logger.info("Starting search loop over plan items...")
     for item_index, plan_item_query in enumerate(search_plan_list):
-        logger.info(f"Searching for plan item {item_index+1}/{len(search_plan_list)}: '{plan_item_query}'")
+        print(f"{COLOR_INFO}---> Searching for plan item {item_index+1}/{len(search_plan_list)}: '{plan_item_query}'{COLOR_RESET}")
+        logger.info(f"---> Searching for plan item {item_index+1}/{len(search_plan_list)}: '{plan_item_query}'")
         search_query = plan_item_query
+        raw_literature_results = [] # Initialize for saving
+        ddg_results = [] # Initialize for saving
 
         # --- Literature Search ---
         try:
-            logger.debug(f"Performing literature search for item '{search_query}'...")
+            print(f"{COLOR_INFO}    -> Performing literature search...{COLOR_RESET}")
+            logger.info(f"    -> Performing literature search for item '{search_query}'...")
             pubmed_results = search_pubmed(search_query, max_lit)
             arxiv_results = search_arxiv(search_query, max_lit)
             raw_literature_results = pubmed_results + arxiv_results
-            logger.debug(f"Found {len(raw_literature_results)} raw literature results for item.")
+            print(f"{COLOR_INFO}    <- Found {len(raw_literature_results)} literature results.{COLOR_RESET}")
+            logger.info(f"    <- Found {len(raw_literature_results)} raw literature results for item.")
+            # Save raw literature results
+            save_output(run_dir, f"results/search_iter{iteration+1}_item{item_index+1}_lit.json", raw_literature_results)
+
             for res in raw_literature_results:
                 source_prefix = res.get("source", "Lit"); source_id = f"{source_prefix}:{res.get('id', 'N/A')}"
                 content = res.get("abstract", "No abstract found")
                 if content and content != "No abstract found":
                     evidence_entry = {"plan_item": plan_item_query, "source_type": "literature", "source_id": source_id, "title": res.get("title", "N/A"), "content": content, "url": res.get("url", "#")}
                     round_evidence.append(evidence_entry)
-                else: logger.debug(f"Skipping lit result {source_id} (no abstract).")
+                else: logger.debug(f"    Skipping lit result {source_id} (no abstract).")
         except Exception as e:
             lit_error = f"Literature search failed for item '{search_query}': {e}"; logger.error(lit_error, exc_info=False)
             error_message = (error_message + "; " + lit_error) if error_message else lit_error
 
         # --- Web Search (DuckDuckGo) ---
         try:
-            logger.debug(f"Performing web search for item '{search_query}' using DuckDuckGo...")
-            # <<< Call DDG search function >>>
-            ddg_results = search_duckduckgo(search_query)
-            logger.debug(f"Found {len(ddg_results)} formatted results from DDG for item.")
+            print(f"{COLOR_INFO}    -> Performing web search (DDG)...{COLOR_RESET}")
+            logger.info(f"    -> Performing web search for item '{search_query}' using DuckDuckGo...")
+            ddg_results = search_duckduckgo(search_query, num_results=max_web_results)
+            print(f"{COLOR_INFO}    <- Found {len(ddg_results)} DDG results.{COLOR_RESET}")
+            logger.info(f"    <- Found {len(ddg_results)} formatted results from DDG for item.")
+            # Save raw DDG results
+            save_output(run_dir, f"results/search_iter{iteration+1}_item{item_index+1}_web.json", ddg_results)
 
             for i, res in enumerate(ddg_results):
-                # Check for errors reported by the search_duckduckgo wrapper
                 if isinstance(res, dict) and "error" in res:
-                    web_error = f"DDG search tool error for item '{search_query}': {res['error']}"
-                    logger.error(web_error)
-                    error_message = (error_message + "; " + web_error) if error_message else web_error
-                    continue # Skip this error entry
-
-                # Use the snippet from DDG results as the content
-                source_id = f"DDG:{i+1}"
-                content = res.get("snippet", "No snippet available.")
+                    web_error = f"DDG search tool error for item '{search_query}': {res['error']}"; logger.error(web_error)
+                    error_message = (error_message + "; " + web_error) if error_message else web_error; continue
+                source_id = f"DuckDuckGo:{i+1}"; content = res.get("snippet", "No snippet available.")
                 if content and content != "No snippet available.":
-                    evidence_entry = {
-                        "plan_item": plan_item_query,
-                        "source_type": "web", # Changed from web_page as we only have snippet now
-                        "source_id": source_id,
-                        "title": res.get("title", "N/A"),
-                        "content": content, # Store the snippet
-                        "url": res.get("link", "#")
-                    }
+                    evidence_entry = {"plan_item": plan_item_query, "source_type": "web", "source_id": source_id, "title": res.get("title", "N/A"), "content": content, "url": res.get("link", "#")}
                     round_evidence.append(evidence_entry)
-                else: logger.debug(f"Skipping web result {source_id} (no snippet).")
+                else: logger.debug(f"    Skipping web result {source_id} (no snippet).")
         except Exception as e:
-            web_error = f"Web search (DDG) failed for item '{search_query}': {e}"
-            logger.error(web_error, exc_info=False)
+            web_error = f"Web search (DDG) failed for item '{search_query}': {e}"; logger.error(web_error, exc_info=False)
             error_message = (error_message + "; " + web_error) if error_message else web_error
 
+        print(f"{COLOR_INFO}--- Finished searches for plan item {item_index+1} ---{COLOR_RESET}")
+        logger.info(f"--- Finished searches for plan item {item_index+1} ---")
+
+
     # --- Update State ---
-    logger.info(f"Adding {len(round_evidence)} new evidence items from this round to the log.")
+    print(f"{COLOR_INFO}Finished search loop. Adding {len(round_evidence)} new items to evidence log.{COLOR_RESET}")
+    logger.info(f"Finished search loop. Adding {len(round_evidence)} new evidence items from this round to the log.")
     updated_evidence_log = current_evidence_log + round_evidence
-    logger.info(f"Total evidence items in log: {len(updated_evidence_log)}")
+    logger.info(f"Total evidence items in log now: {len(updated_evidence_log)}")
+    print(f"{COLOR_INFO}--- Exiting Execute Search Plan Node ---{COLOR_RESET}")
+    logger.info("--- Exiting Execute Search Plan Node ---")
 
     return {
         **state,
         "evidence_log": updated_evidence_log,
         "search_results": None, # Clear ephemeral results
-        "google_results": None, # Clear ephemeral results
+        "google_results": None, # Clear ephemeral results (not used)
         "error": error_message
     }
 
 
-# --- Node Function: Evaluate Findings ---
-# (No changes needed in this function from v1.8 - still uses placeholder logic)
+# --- Node Function: Evaluate Findings (v1.12 - Implemented) ---
+
 def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_template: str) -> AgentState:
      """
      Evaluates the evidence gathered so far against the hypothesis using an LLM.
@@ -246,7 +262,7 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
      hypothesis = state.get("hypothesis", "No hypothesis provided.")
      evidence_log = state.get("evidence_log", [])
      current_iterations = state.get("research_iterations", 0)
-     error_message = state.get("error")
+     error_message = state.get("error") # Preserve existing errors
 
      logger.info(f"Evaluating {len(evidence_log)} evidence items after iteration {current_iterations}.")
 
@@ -255,65 +271,105 @@ def evaluate_findings(state: AgentState, llm: BaseChatModel, evaluation_prompt_t
      next_search_plan_list = []
      more_research_needed = False # Default to concluding
 
-     if not evidence_log and current_iterations == 0 : # No evidence after first search
-         logger.warning("No evidence collected in the first round to evaluate. Concluding research.")
+     # Avoid evaluation if evidence log is empty (unless it's the very first iteration after search)
+     if not evidence_log:
+         logger.warning("Evidence log is empty. Cannot evaluate findings. Concluding research.")
+         # Increment iteration count even if concluding early
          return {**state, "evaluation_summary": "No evidence collected.", "more_research_needed": False, "research_iterations": current_iterations + 1, "search_plan": []}
 
-     # Format evidence for the prompt (limit length)
+     # Format evidence for the prompt (limit length, focus on recent)
      evidence_texts = []
-     MAX_EVIDENCE_CHARS = 4000 # Adjust as needed
-     current_chars = 0; items_included = 0
-     relevant_evidence = evidence_log[-50:] # Limit context window
-     for entry in reversed(relevant_evidence):
-         entry_text = f"Source: {entry.get('source_id', 'N/A')} (Related to: {entry.get('plan_item', 'N/A')})\nContent Snippet: {entry.get('content', '')[:300]}...\n---\n"
-         if current_chars + len(entry_text) > MAX_EVIDENCE_CHARS and items_included > 0:
-             logger.warning(f"Truncating evidence log for evaluation prompt at {items_included} items due to length.")
-             break
-         evidence_texts.append(entry_text); current_chars += len(entry_text); items_included += 1
-     evidence_prompt_text = "\n".join(reversed(evidence_texts)) if evidence_texts else "No evidence to display."
+     MAX_EVIDENCE_CHARS = 4000 # Adjust as needed for context window
+     current_chars = 0
+     items_included = 0
+     # Focus on evidence added in the *last* round if possible, or just recent evidence
+     # Heuristic: Assume evidence added since last evaluation might be relevant
+     # A more robust way would be to track evidence per iteration, but this is simpler for now.
+     relevant_evidence = evidence_log[-50:] # Example: Look at last 50 items
+     logger.info(f"Formatting last {len(relevant_evidence)} evidence items for evaluation prompt...")
 
+     for entry in reversed(relevant_evidence): # Show most recent first in prompt formatting
+         entry_text = f"Source: {entry.get('source_id', 'N/A')} (Related to: {entry.get('plan_item', 'N/A')})\nContent Snippet: {entry.get('content', '')[:300]}...\n---\n" # Shorter snippet
+         if current_chars + len(entry_text) > MAX_EVIDENCE_CHARS and items_included > 0:
+             logger.warning(f"Truncating evidence log for evaluation prompt at {items_included} items due to length ({MAX_EVIDENCE_CHARS} chars).")
+             break
+         evidence_texts.append(entry_text)
+         current_chars += len(entry_text)
+         items_included += 1
+     evidence_prompt_text = "\n".join(reversed(evidence_texts)) if evidence_texts else "No recent evidence to display."
+
+     # Check prompt template validity
      if "Error:" in evaluation_prompt_template:
          logger.error("Evaluation prompt template not loaded correctly.")
          err_msg = "Config error: Evaluation prompt missing."
+         # Conclude research on config error
          return {**state, "evaluation_summary": "Error: Config.", "more_research_needed": False, "research_iterations": current_iterations + 1, "search_plan": [], "error": (error_message or "") + "; " + err_msg}
 
      try:
-         logger.info("Calling LLM for evidence evaluation and next plan...")
+         logger.info("Calling LLM for evidence evaluation and next plan generation...")
          prompt = evaluation_prompt_template.format(hypothesis=hypothesis, evidence_text=evidence_prompt_text)
          response = llm.invoke(prompt)
          response_text = response.content.strip()
          logger.debug(f"LLM raw response for evaluation:\n{response_text}")
 
          # --- Parse LLM Response ---
+         # Extract Evaluation Summary
          summary_match = re.search(r"Evaluation Summary:\s*(.*)", response_text, re.IGNORECASE | re.DOTALL)
-         decision_match = re.search(r"Decision:\s*(Continue Research|Conclude Research)", response_text, re.IGNORECASE | re.DOTALL)
-         plan_match = re.search(r"Refined Search Plan:\s*\n?(.*)", response_text, re.IGNORECASE | re.DOTALL)
-
          if summary_match:
+             # Extract text until the next section header or end of string
              evaluation_summary = summary_match.group(1).split("Gaps/Next Steps:")[0].split("Decision:")[0].strip()
              logger.info(f"Parsed Evaluation Summary: {evaluation_summary}")
-         else: logger.warning("Could not parse 'Evaluation Summary:' from LLM response."); evaluation_summary = "LLM response format error."
+         else:
+             logger.warning("Could not parse 'Evaluation Summary:' from LLM response.")
+             evaluation_summary = "LLM response did not follow expected format for summary."
 
+         # Extract Decision
+         decision_match = re.search(r"Decision:\s*(Continue Research|Conclude Research)", response_text, re.IGNORECASE | re.DOTALL)
          if decision_match:
              decision = decision_match.group(1).strip()
-             if "Continue Research".lower() in decision.lower(): more_research_needed = True; logger.info("Parsed Decision: Continue Research")
-             else: more_research_needed = False; logger.info("Parsed Decision: Conclude Research")
-         else: logger.warning("Could not parse 'Decision:' from LLM response. Defaulting to Conclude."); more_research_needed = False
+             if "Continue Research".lower() in decision.lower():
+                 more_research_needed = True
+                 logger.info("Parsed Decision: Continue Research")
+             else:
+                 more_research_needed = False
+                 logger.info("Parsed Decision: Conclude Research")
+         else:
+             logger.warning("Could not parse 'Decision:' from LLM response. Defaulting to Conclude Research.")
+             more_research_needed = False
 
-         if more_research_needed and plan_match:
-             plan_block = plan_match.group(1).strip()
-             if plan_block.lower() != "n/a":
-                 list_items = re.findall(r"^\s*(?:\d+\.|[-*+])\s+(.*)", plan_block, re.MULTILINE)
-                 if list_items: next_search_plan_list = [item.strip() for item in list_items]; logger.info(f"Parsed Refined Search Plan List: {next_search_plan_list}")
-                 else: logger.warning("Could not parse enumerated list from 'Refined Search Plan:'. Stopping research."); more_research_needed = False; next_search_plan_list = []
-             else: logger.info("Refined Search Plan is 'N/A'. Stopping research."); more_research_needed = False; next_search_plan_list = []
-         elif more_research_needed: logger.warning("Decision 'Continue' but no 'Refined Search Plan:' found/parsed. Stopping."); more_research_needed = False; next_search_plan_list = []
-         else: next_search_plan_list = [] # Concluding
+         # Extract Refined Search Plan (only if continuing)
+         if more_research_needed:
+             plan_match = re.search(r"Refined Search Plan:\s*\n?(.*)", response_text, re.IGNORECASE | re.DOTALL)
+             if plan_match:
+                 plan_block = plan_match.group(1).strip()
+                 if plan_block.lower() != "n/a" and plan_block:
+                     # Parse enumerated list
+                     list_items = re.findall(r"^\s*(?:\d+\.|[-*+])\s+(.*)", plan_block, re.MULTILINE)
+                     if list_items:
+                         next_search_plan_list = [item.strip() for item in list_items]
+                         logger.info(f"Parsed Refined Search Plan List: {next_search_plan_list}")
+                     else:
+                         logger.warning("Could not parse enumerated list from 'Refined Search Plan:'. Stopping research.")
+                         more_research_needed = False; next_search_plan_list = []
+                 else:
+                     logger.info("Refined Search Plan is 'N/A' or empty. Stopping research.")
+                     more_research_needed = False; next_search_plan_list = []
+             else:
+                 logger.warning("Decision was 'Continue Research' but no 'Refined Search Plan:' section found/parsed. Stopping research.")
+                 more_research_needed = False; next_search_plan_list = []
+         else:
+             # Concluding research, ensure next plan is empty
+             next_search_plan_list = []
+             logger.info("Concluding research, no new search plan generated.")
+
 
      except Exception as e:
-         eval_error = f"LLM call failed during evaluation: {e}"; logger.error(eval_error, exc_info=True)
+         eval_error = f"LLM call failed during evaluation: {e}"
+         logger.error(eval_error, exc_info=True)
          error_message = (error_message + "; " + eval_error) if error_message else eval_error
-         evaluation_summary = "Error during evaluation."; more_research_needed = False; next_search_plan_list = []
+         evaluation_summary = "Error during evaluation."
+         more_research_needed = False # Stop loop on error
+         next_search_plan_list = []
 
      # Update state
      return {

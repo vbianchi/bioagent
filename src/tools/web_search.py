@@ -1,83 +1,64 @@
 import logging
-from typing import List, Dict, Any
-# <<< Import DuckDuckGo Tool >>>
-from langchain_community.tools import DuckDuckGoSearchRun
+from typing import List, Dict, Any, Optional
+# <<< Import DDGS from the underlying library >>>
+from duckduckgo_search import DDGS
+# json and re are no longer needed for parsing the response here
+# import json
+# import re
 
 logger = logging.getLogger(__name__)
 
-# Initialize the DDG search tool once
-# It doesn't require API keys for basic snippet/link retrieval
-ddg_search = DuckDuckGoSearchRun()
-
-def search_duckduckgo(query: str) -> List[Dict[str, Any]]:
+def search_duckduckgo(query: str, num_results: int = 5) -> List[Dict[str, Any]]:
     """
-    Performs a DuckDuckGo search for the given query using DuckDuckGoSearchRun
-    and returns formatted results (primarily snippets).
+    Performs a DuckDuckGo search using the duckduckgo-search library directly
+    and returns structured results.
 
     Args:
         query: The search query string.
+        num_results: The desired maximum number of results.
 
     Returns:
         A list of dictionaries, each containing 'title', 'link', 'snippet', 'source'.
         Returns an empty list or list with error dict on failure.
-        NOTE: DuckDuckGoSearchRun primarily returns a single string blob of results.
-              We need to parse it or use a different DDG tool if we need structured output reliably.
-              Let's try basic parsing first. If it's unreliable, we might need
-              DuckDuckGoSearchResults which requires installing 'duckduckgo_search'.
     """
-    logger.info(f"Performing DuckDuckGo search for: '{query}'...")
+    logger.info(f"Performing DuckDuckGo search for: '{query}' (max_results={num_results})...")
     results: List[Dict[str, Any]] = []
     try:
-        # Run the search - this typically returns a formatted string
-        search_response_str = ddg_search.run(query)
-        logger.debug(f"DuckDuckGoSearchRun response string:\n{search_response_str}")
+        # <<< Use the DDGS object directly >>>
+        # Instantiate the search object
+        with DDGS() as ddgs:
+            # Use ddgs.text() for standard search results
+            # It returns a generator, convert it to a list
+            # Note: The library's max_results might behave slightly differently than the wrapper's
+            ddg_results_list = list(ddgs.text(query, max_results=num_results))
 
-        # --- Attempt to parse the string response ---
-        # This parsing is basic and might break if the output format changes.
-        # A more robust approach might involve DuckDuckGoSearchResults tool
-        # or regex, but let's try simple splitting.
-        # Often results look like: "Snippet 1... [Source: Title 1](link1)"
-        import re
-        # Simple pattern: Look for markdown-style links often used for sources
-        # Extract snippet before link, title within link text, and URL
-        pattern = r"\[Source:\s*(.*?)\s*\]\((.*?)\)" # Pattern for [Source: Title](link)
-        found_items = re.findall(pattern, search_response_str)
+        logger.info(f"duckduckgo-search library returned {len(ddg_results_list)} items.")
 
-        # Split the main text by the source markers to try and get snippets
-        snippets_parts = re.split(pattern, search_response_str)
-
-        if found_items:
-            logger.info(f"Attempting to parse {len(found_items)} items from DDG response.")
-            for i, (title, link) in enumerate(found_items):
-                # Try to associate snippet based on split parts
-                snippet = snippets_parts[i].strip() if i < len(snippets_parts) else "Snippet not parsed."
-                # Clean up snippet (remove potential leading/trailing noise)
-                snippet = snippet.split("\n")[-1].strip() # Take last part before source marker
+        # --- Process the structured response ---
+        # The library returns a list of dicts with keys: 'title', 'href', 'body'
+        for i, res in enumerate(ddg_results_list):
+            if isinstance(res, dict):
+                # Map the library's keys to our standard format
+                title = res.get('title', f'DDG Result {i+1}')
+                link = res.get('href', '#') # Map 'href' to 'link'
+                snippet = res.get('body', 'No snippet available.') # Map 'body' to 'snippet'
 
                 results.append({
-                    "title": title.strip(),
-                    "link": link.strip(),
-                    "snippet": snippet if snippet else "Snippet not parsed.",
+                    "title": title,
+                    "link": link,
+                    "snippet": snippet,
                     "source": f"DuckDuckGo:{i+1}" # Add source identifier
                 })
-        elif search_response_str: # If no structured sources found, return the whole blob as one result
-             logger.warning("Could not parse structured results from DuckDuckGoSearchRun output. Returning full text as snippet.")
-             results.append({
-                 "title": f"DuckDuckGo Results for '{query}'",
-                 "link": "#",
-                 "snippet": search_response_str,
-                 "source": "DuckDuckGo:Raw"
-             })
-        else:
-            logger.info("DuckDuckGo search returned no results.")
+            else:
+                logger.warning(f"Skipping non-dictionary item in DDG results: {res}")
 
+    except ImportError:
+         # This error shouldn't happen if requirements are met, but keep for safety
+         logger.error("duckduckgo_search package not found. Please run 'uv pip install -U duckduckgo-search'")
+         results = [{"error": "Missing dependency: duckduckgo-search"}]
     except Exception as e:
         logger.error(f"Error during DuckDuckGo search execution: {e}", exc_info=True)
         results = [{"error": f"DuckDuckGo search failed: {e}"}]
 
     logger.info(f"Formatted {len(results)} DuckDuckGo results.")
     return results
-
-# Remove the old search_google function
-# def search_google(...):
-#     pass

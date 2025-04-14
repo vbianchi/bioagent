@@ -31,9 +31,7 @@ except ImportError:
 
 # --- Import Tool Utilities ---
 from src.tools.llm_utils import initialize_llm
-# <<< Google Search tool object is no longer needed here >>>
 
-# -----------------------------------------------------------------
 # --- Import Agent Nodes and Conditional Logic ---
 # Standard Path Agents
 from src.agents.router import route_query, decide_next_node
@@ -50,9 +48,9 @@ from src.agents.deep_research import (
     ask_plan_approval,
     get_plan_modifications,
     refine_plan_with_feedback,
-    execute_search_plan, # Now uses DDG internally
-    evaluate_findings,
-    generate_final_report
+    execute_search_plan,
+    evaluate_findings,   # <<< Now implemented >>>
+    generate_final_report # Placeholder
 )
 
 # --- Initialize Colorama ---
@@ -100,9 +98,10 @@ logger.info("Language Models initialized.")
 # --- Search Settings & Deep Research Settings ---
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
-# NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5) # Removed
+# <<< Use the DDG key now >>>
+NUM_DDG_RESULTS = get_config_value(config, "search_settings.num_ddg_results", 5)
 MAX_RESEARCH_ITERATIONS = get_config_value(config, "search_settings.max_research_iterations", 3)
-logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}") # Updated log
+logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxDDG={NUM_DDG_RESULTS}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}") # Updated log
 logger.info(f"Deep Research settings: MaxIter={MAX_RESEARCH_ITERATIONS}")
 
 # --- Prompt Templates ---
@@ -119,7 +118,7 @@ prompt_templates = {k: v for k, v in locals().items() if k.endswith('_PROMPT_TEM
 for name, template in prompt_templates.items():
     if isinstance(template, str) and template.startswith("Error:"): logger.error(f"Prompt '{name}' failed load!");
 
-# <<< Removed Google Search Tool Setup Section >>>
+# <<< Google Search Tool Setup Removed >>>
 
 # --- Conditional Edge Logic ---
 def decide_after_refine(state: AgentState) -> str:
@@ -172,8 +171,8 @@ graph_builder.add_node("start_deep_research", partial(start_deep_research, llm=d
 graph_builder.add_node("ask_plan_approval", ask_plan_approval)
 graph_builder.add_node("get_plan_modifications", get_plan_modifications)
 graph_builder.add_node("refine_plan_with_feedback", partial(refine_plan_with_feedback, llm=deep_research_llm, refine_plan_prompt_template=REFINE_PLAN_PROMPT_TEMPLATE))
-# <<< Updated: execute_search_plan no longer needs google_search_tool_object passed >>>
-graph_builder.add_node("execute_search_plan", execute_search_plan)
+# <<< Updated: Pass run_dir to execute_search_plan for saving results >>>
+graph_builder.add_node("execute_search_plan", partial(execute_search_plan, run_dir=None)) # Pass run_dir=None initially, will be updated from state
 # <<< Updated: Pass args to evaluate_findings now that it's implemented >>>
 graph_builder.add_node("evaluate_findings", partial(evaluate_findings, llm=deep_research_llm, evaluation_prompt_template=EVALUATION_PROMPT_TEMPLATE))
 # Pass only function for generate_final_report placeholder
@@ -210,34 +209,16 @@ except Exception as compile_e: logger.critical(f"Failed to compile agent graph: 
 
 
 # --- Helper Function to Save Output Files ---
-def save_output(run_dir: str, relative_path: str, data: Any):
-    if not run_dir: logger.warning("Cannot save output: run_dir not set."); return
-    filepath = os.path.join(run_dir, relative_path)
-    try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        with open(filepath, 'w', encoding='utf-8') as f:
-            if isinstance(data, str): f.write(data)
-            else: json.dump(data, f, indent=2, default=str)
-        logger.info(f"Output successfully saved to: {filepath}")
-    except Exception as e: logger.error(f"Failed to save output to {filepath}: {e}", exc_info=True)
+# Moved definition to top level for import into agents
+# def save_output(...): ...
 
 # --- Helper Function for CLI Input ---
-def get_input(prompt: str) -> str:
-    try: line = input(prompt); return line
-    except (EOFError, KeyboardInterrupt): logger.info("Input interrupted, treating as 'quit'."); return 'quit'
+# Moved definition to top level
+# def get_input(...): ...
 
 # --- Helper Function to Format Results for History ---
-def format_results_for_history(results: Optional[List[Dict[str, Any]]], max_to_show: int = 3) -> str:
-    if not results: return "No results found."
-    lines = ["Found results:"]; count = 0
-    for i, res in enumerate(results):
-        if count >= max_to_show: lines.append(f"... plus {len(results) - max_to_show} more."); break
-        title = res.get('title', 'N/A'); authors = res.get('authors', [])
-        authors_str = ", ".join(map(str, authors)) if authors else "N/A"
-        source = res.get('source', 'N/A'); res_id = res.get('id', 'N/A')
-        lines.append(f"{i+1}. {title} by {authors_str} ({source}: {res_id})")
-        count += 1
-    return "\n".join(lines)
+# Moved definition to top level
+# def format_results_for_history(...): ...
 
 # ==================================
 # Main Execution Block (CLI)
@@ -279,7 +260,7 @@ if __name__ == "__main__":
 
         logger.info(f"--- Starting Interaction #{interaction_count} ---"); logger.info(f"User Query: {initial_query}")
         input_for_graph = AgentState(
-            query=initial_query.strip(), history=conversation_state["history"], run_dir=run_dir,
+            query=initial_query.strip(), history=conversation_state["history"], run_dir=run_dir, # Pass run_dir here
             refined_query=None, search_results=None, summary=None, chat_response=None,
             error=None, next_node=None, arxiv_results_found=False, download_preference=None,
             code_request=None, generated_code=None, generated_code_language=None,
@@ -292,7 +273,11 @@ if __name__ == "__main__":
         final_state: Optional[AgentState] = None
         try:
             stream_config: Dict[str, Any] = {"recursion_limit": 35}
-            for event in app.stream(input_for_graph, config=stream_config):
+            # Inject run_dir into the config for execute_search_plan node
+            # LangGraph merges this config with the state for node execution
+            node_configs = {"execute_search_plan": {"run_dir": run_dir}}
+
+            for event in app.stream(input_for_graph, config=stream_config): # Pass node_configs if needed, but state has run_dir
                 node_name = list(event.keys())[0]; node_output_state = event[node_name]
                 logger.debug(f"Node '{node_name}' executed."); final_state = node_output_state
 
@@ -342,7 +327,13 @@ if __name__ == "__main__":
             elif isinstance(final_state.get("search_results"), list) and not final_state.get("search_results") and final_state.get("route_intent") == "literature_search" and not final_state.get("summary"):
                 refined_query = final_state.get('refined_query', 'N/A'); no_results_msg = f"No lit results found for: '{refined_query}'"; output_message_for_console = f"{COLOR_WARN}{no_results_msg}{COLOR_RESET}"; logger.info(no_results_msg); agent_response_for_history = no_results_msg; saved_filename=f"search_results_{interaction_count}.txt"; save_output(run_dir, os.path.join("results", saved_filename), no_results_msg); conversation_state["last_search_results"] = []; conversation_state["last_summary"] = None
             elif not final_state.get("error"): # Fallback
-                no_output_msg = "Agent finished processing."; output_message_for_console = f"{COLOR_WARN}{no_output_msg}{COLOR_RESET}"; logger.warning("No standard output generated."); agent_response_for_history = "Processing complete."; saved_filename=f"output_{interaction_count}_final_state.json"; save_output(run_dir, os.path.join("results", saved_filename), final_state)
+                # <<< Add check for evaluation summary if loop finished >>>
+                if final_state.get("evaluation_summary"):
+                    output_message_for_console = f"{COLOR_OUTPUT}Research evaluation complete:\n{final_state['evaluation_summary']}{COLOR_RESET}"
+                    agent_response_for_history = f"Research evaluation: {final_state['evaluation_summary']}"
+                else:
+                    no_output_msg = "Agent finished processing."; output_message_for_console = f"{COLOR_WARN}{no_output_msg}{COLOR_RESET}"; logger.warning("No standard output generated."); agent_response_for_history = "Processing complete."; saved_filename=f"output_{interaction_count}_final_state.json"; save_output(run_dir, os.path.join("results", saved_filename), final_state)
+
 
             # --- Print Output to Console ---
             if output_message_for_console: print(output_message_for_console)
