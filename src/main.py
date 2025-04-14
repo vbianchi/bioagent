@@ -31,12 +31,7 @@ except ImportError:
 
 # --- Import Tool Utilities ---
 from src.tools.llm_utils import initialize_llm
-# --- Assume google_search tool is available in the environment ---
-google_search = None
-try: from core_tools import google_search
-except ImportError:
-    if 'google_search' in globals(): google_search = globals()['google_search']
-    else: pass
+# <<< Google Search tool object is no longer needed here >>>
 
 # -----------------------------------------------------------------
 # --- Import Agent Nodes and Conditional Logic ---
@@ -53,11 +48,11 @@ from src.agents.coding import call_coding_agent
 from src.agents.deep_research import (
     start_deep_research,
     ask_plan_approval,
-    get_plan_modifications,  # <<< New node >>>
-    refine_plan_with_feedback, # <<< New node >>>
-    execute_search_plan,
-    evaluate_findings, # <<< Now implemented >>>
-    generate_final_report # Placeholder
+    get_plan_modifications,
+    refine_plan_with_feedback,
+    execute_search_plan, # Now uses DDG internally
+    evaluate_findings,
+    generate_final_report
 )
 
 # --- Initialize Colorama ---
@@ -105,9 +100,9 @@ logger.info("Language Models initialized.")
 # --- Search Settings & Deep Research Settings ---
 MAX_RESULTS_PER_SOURCE = get_config_value(config, "search_settings.max_results_per_source", 3)
 MAX_ABSTRACTS_TO_SUMMARIZE = get_config_value(config, "search_settings.max_abstracts_to_summarize", 3)
-NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5)
+# NUM_GOOGLE_RESULTS = get_config_value(config, "search_settings.num_google_results", 5) # Removed
 MAX_RESEARCH_ITERATIONS = get_config_value(config, "search_settings.max_research_iterations", 3)
-logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxGoog={NUM_GOOGLE_RESULTS}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}")
+logger.info(f"Search settings: MaxLit={MAX_RESULTS_PER_SOURCE}, MaxAbs={MAX_ABSTRACTS_TO_SUMMARIZE}") # Updated log
 logger.info(f"Deep Research settings: MaxIter={MAX_RESEARCH_ITERATIONS}")
 
 # --- Prompt Templates ---
@@ -118,20 +113,13 @@ CODE_GENERATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.code_generat
 SYNTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.synthesis_prompt", "Error: Synthesis prompt missing.")
 HYPOTHESIS_PROMPT_TEMPLATE = get_config_value(config, "prompts.hypothesis_prompt", "Error: Hypothesis prompt missing.")
 EVALUATION_PROMPT_TEMPLATE = get_config_value(config, "prompts.evaluation_prompt", "Error: Evaluation prompt missing.")
-# <<< Load new prompt >>>
 REFINE_PLAN_PROMPT_TEMPLATE = get_config_value(config, "prompts.refine_plan_prompt", "Error: Refine plan prompt missing.")
 FINAL_REPORT_PROMPT_TEMPLATE = get_config_value(config, "prompts.final_report_prompt", "Error: Final report prompt missing.")
 prompt_templates = {k: v for k, v in locals().items() if k.endswith('_PROMPT_TEMPLATE')}
 for name, template in prompt_templates.items():
     if isinstance(template, str) and template.startswith("Error:"): logger.error(f"Prompt '{name}' failed load!");
 
-# --- Google Search Tool Setup ---
-google_search_tool_object = None; logger.info("Checking for Google Search tool...")
-try: from core_tools import google_search;
-except ImportError:
-    if 'google_search' in globals() and globals()['google_search'] is not None: google_search_tool_object = globals()['google_search']
-if google_search_tool_object: logger.info(f"Google Search tool available.")
-else: logger.warning("Google Search tool is None.")
+# <<< Removed Google Search Tool Setup Section >>>
 
 # --- Conditional Edge Logic ---
 def decide_after_refine(state: AgentState) -> str:
@@ -151,21 +139,12 @@ def decide_after_summary(state: AgentState) -> str:
     if intent == "literature_search": return END
     else: logger.warning(f"Unexpected intent '{intent}' after summary."); return END
 
-# <<< Updated: Conditional edge after plan approval prompt >>>
 def decide_after_approval_prompt(state: AgentState) -> str:
-    """Routes based on user approval/modification choice."""
-    approval_status = state.get("plan_approved", "no") # Default to 'no' if None
-    if approval_status == "yes":
-        logger.info("Plan approved. Proceeding to execute search plan.")
-        return "execute_search_plan"
-    elif approval_status == "mod":
-        logger.info("Routing to get plan modifications from user.")
-        return "get_plan_modifications"
-    else: # 'no' or any other case
-        logger.warning("Plan not approved or modified. Ending deep research workflow.")
-        return END
+    approval_status = state.get("plan_approved", "no")
+    if approval_status == "yes": logger.info("Plan approved."); return "execute_search_plan"
+    elif approval_status == "mod": logger.info("Routing to get plan mods."); return "get_plan_modifications"
+    else: logger.warning("Plan not approved."); return END
 
-# Conditional edge for the deep research loop
 def decide_next_research_step(state: AgentState) -> str:
     more_research = state.get("more_research_needed", False); iterations = state.get("research_iterations", 0)
     if more_research and iterations < MAX_RESEARCH_ITERATIONS: logger.info(f"Decision: Continue research (Iter {iterations+1})."); return "execute_search_plan"
@@ -191,12 +170,11 @@ graph_builder.add_node("coding_agent", partial(call_coding_agent, coding_llm=cod
 # Add nodes (New Deep Research Path)
 graph_builder.add_node("start_deep_research", partial(start_deep_research, llm=deep_research_llm, hypothesis_prompt_template=HYPOTHESIS_PROMPT_TEMPLATE))
 graph_builder.add_node("ask_plan_approval", ask_plan_approval)
-# <<< Add new nodes for modification >>>
 graph_builder.add_node("get_plan_modifications", get_plan_modifications)
 graph_builder.add_node("refine_plan_with_feedback", partial(refine_plan_with_feedback, llm=deep_research_llm, refine_plan_prompt_template=REFINE_PLAN_PROMPT_TEMPLATE))
-# ---
-graph_builder.add_node("execute_search_plan", partial(execute_search_plan, google_search_tool_object=google_search_tool_object))
-# <<< Update: Pass args to evaluate_findings now that it's implemented >>>
+# <<< Updated: execute_search_plan no longer needs google_search_tool_object passed >>>
+graph_builder.add_node("execute_search_plan", execute_search_plan)
+# <<< Updated: Pass args to evaluate_findings now that it's implemented >>>
 graph_builder.add_node("evaluate_findings", partial(evaluate_findings, llm=deep_research_llm, evaluation_prompt_template=EVALUATION_PROMPT_TEMPLATE))
 # Pass only function for generate_final_report placeholder
 graph_builder.add_node("generate_final_report", generate_final_report)
@@ -211,31 +189,18 @@ graph_builder.add_edge("literature_agent", "ask_download_preference")
 graph_builder.add_conditional_edges("ask_download_preference", should_download_lit_path, {"download_arxiv_pdfs": "download_arxiv_pdfs", "summarizer": "summarizer"})
 graph_builder.add_edge("download_arxiv_pdfs", "summarizer")
 graph_builder.add_conditional_edges("summarizer", decide_after_summary, {END: END})
-
 # Deep Research Path (with Modification Loop)
 graph_builder.add_edge("start_deep_research", "ask_plan_approval")
-graph_builder.add_conditional_edges( # <<< Updated edge >>>
-    "ask_plan_approval",
-    decide_after_approval_prompt, # <<< Use new conditional logic >>>
-    {
-        "execute_search_plan": "execute_search_plan", # If 'yes'
-        "get_plan_modifications": "get_plan_modifications", # If 'mod'
-        END: END # If 'no'
-    }
-)
-# Modification loop
+graph_builder.add_conditional_edges("ask_plan_approval", decide_after_approval_prompt, {"execute_search_plan": "execute_search_plan", "get_plan_modifications": "get_plan_modifications", END: END})
 graph_builder.add_edge("get_plan_modifications", "refine_plan_with_feedback")
-graph_builder.add_edge("refine_plan_with_feedback", "ask_plan_approval") # Loop back to ask approval for refined plan
-
+graph_builder.add_edge("refine_plan_with_feedback", "ask_plan_approval")
 # Main research loop
 graph_builder.add_edge("execute_search_plan", "evaluate_findings")
 graph_builder.add_conditional_edges("evaluate_findings", decide_next_research_step, {"execute_search_plan": "execute_search_plan", "generate_final_report": "generate_final_report"})
 graph_builder.add_edge("generate_final_report", END)
-
 # Simple Paths
 graph_builder.add_edge("chat_agent", END)
 graph_builder.add_edge("coding_agent", END)
-
 
 # Compile the graph
 logger.info("Compiling agent graph...")
@@ -319,14 +284,14 @@ if __name__ == "__main__":
             error=None, next_node=None, arxiv_results_found=False, download_preference=None,
             code_request=None, generated_code=None, generated_code_language=None,
             google_results=None, synthesized_report=None, route_intent=None,
-            hypothesis=None, search_plan=[], evidence_log=[], research_iterations=0, # Ensure search_plan is list
-            evaluation_summary=None, more_research_needed=False, plan_approved=None, plan_modifications=None # Init new fields
+            hypothesis=None, search_plan=[], evidence_log=[], research_iterations=0,
+            evaluation_summary=None, more_research_needed=False, plan_approved=None, plan_modifications=None
         )
 
         logger.info(f"Invoking agent graph...")
         final_state: Optional[AgentState] = None
         try:
-            stream_config: Dict[str, Any] = {"recursion_limit": 35} # Increased limit slightly for mod loop
+            stream_config: Dict[str, Any] = {"recursion_limit": 35}
             for event in app.stream(input_for_graph, config=stream_config):
                 node_name = list(event.keys())[0]; node_output_state = event[node_name]
                 logger.debug(f"Node '{node_name}' executed."); final_state = node_output_state

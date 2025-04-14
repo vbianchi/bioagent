@@ -10,3 +10,5 @@ langchain-ollama
 colorama
 pandas
 matplotlib
+langchain-community
+duckduckgo-search # <<< Added dependency for DDG tool >>>
